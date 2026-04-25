@@ -1,3 +1,4 @@
+import logging
 import warnings
 from typing import Dict
 
@@ -149,9 +150,10 @@ def log_final_metrics(
     else:
         fig, axes = get_repertoire_fig(repertoire, cfg, repertoire_name="repertoire")
     if fig is not None:
-        wandb.log(
-            {"final/repertoire": wandb.Image(fig)},
-        )
+        try:
+            wandb.log({"final/repertoire": wandb.Image(fig)})
+        except Exception as e:
+            logging.warning(f"wandb image log failed (cross-device/WSL issue): {e}")
         plt.close(fig)
 
     if passive_repertoire is not None:
@@ -159,9 +161,10 @@ def log_final_metrics(
             passive_repertoire, cfg, repertoire_name="passive_repertoire"
         )
         if fig is not None:
-            wandb.log(
-                {"final/passive_repertoire": wandb.Image(fig)},
-            )
+            try:
+                wandb.log({"final/passive_repertoire": wandb.Image(fig)})
+            except Exception as e:
+                logging.warning(f"wandb image log failed (cross-device/WSL issue): {e}")
             plt.close(fig)
 
     for key, value in metrics.items():

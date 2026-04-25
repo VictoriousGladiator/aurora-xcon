@@ -1,9 +1,14 @@
+import collections
+import datetime
 import functools
 import logging
+import math
 import os
 import time
 from pathlib import Path
 from typing import Any
+
+import numpy as np
 
 import hydra
 import jax
@@ -34,6 +39,39 @@ from utils import (
 )
 from viz.visualization import kheperax_viz_best_individual, viz_best_individual
 
+from logging_utils.metrics_logger import MetricsLogger
+
+
+def _check_adaptive_trigger(
+    history: collections.deque,
+    last_ext_iter: int,
+    current_iter: int,
+    ae_cfg,
+) -> tuple:
+    """Return (fired, recent_rate, historical_rate, ratio).
+
+    All window sizes are in outer-loop iterations (each = metrics_log_period gens).
+    Requires 5*patience+1 history values before it can fire.
+    """
+    nan = float("nan")
+    p = ae_cfg.patience
+    if current_iter < ae_cfg.warmup:
+        return False, nan, nan, nan
+    if current_iter - last_ext_iter < ae_cfg.cooldown:
+        return False, nan, nan, nan
+    n = len(history)
+    if n < 5 * p + 1:
+        return False, nan, nan, nan
+    h = list(history)
+    deltas = [h[j] - h[j - 1] for j in range(1, n)]
+    recent_rate = float(np.mean(deltas[-p:]))
+    historical_rate = float(np.mean(deltas[-5 * p:]))
+    if historical_rate < 1e-12:
+        return False, recent_rate, historical_rate, nan
+    ratio = recent_rate / historical_rate
+    triggered = bool(ratio < ae_cfg.alpha)
+    return triggered, recent_rate, historical_rate, ratio
+
 
 def train(
     cfg: DictConfig,
@@ -44,6 +82,7 @@ def train(
     passive_repertoire,
     aurora,
     random_key,
+    logger: MetricsLogger = None,
 ):
 
     model_params = aurora_extra_info.model_params
@@ -61,6 +100,11 @@ def train(
     default_update_base = cfg.default_update_base
     update_base = int(jnp.ceil(default_update_base / cfg.metrics_log_period))
     schedules = jnp.cumsum(jnp.arange(update_base, num_generations, update_base))
+
+    _top_k_history: collections.deque = collections.deque(
+        maxlen=5 * cfg.adaptive_extinction.patience + 1
+    )
+    _last_extinction_iter: int = 0
 
     for i in range(num_generations):
 
@@ -91,10 +135,61 @@ def train(
 
         total_evaluations += cfg.metrics_log_period * cfg.batch_size
 
+        # --- per-generation metrics & trigger ---
+        actual_gen = (i + 1) * cfg.metrics_log_period
+        valid = repertoire.fitnesses != -jnp.inf
+        fits_np = np.asarray(repertoire.fitnesses[valid])
+
+        # top-k% mean fitness (one sort; shared by trigger and logger)
+        if fits_np.size > 0:
+            k_n = max(1, math.ceil(cfg.top_k_percent / 100.0 * fits_np.size))
+            mean_topk = float(np.float32(np.sort(fits_np)[-k_n:].mean()))
+        else:
+            mean_topk = float("nan")
+        _top_k_history.append(mean_topk)
+
+        # extinction decision
+        _nan = float("nan")
+        trigger_info = {
+            "recent_rate": _nan,
+            "historical_rate": _nan,
+            "ratio": _nan,
+            "triggered": False,
+        }
+        is_ext = False
+        if i != num_generations - 1:
+            if cfg.extinction_mode == "static":
+                is_ext = (i + 1) % cfg.extinction_freq == 0
+            elif cfg.extinction_mode == "adaptive":
+                fired, rr, hr, ratio = _check_adaptive_trigger(
+                    _top_k_history, _last_extinction_iter, i, cfg.adaptive_extinction
+                )
+                trigger_info = {
+                    "recent_rate": rr,
+                    "historical_rate": hr,
+                    "ratio": ratio,
+                    "triggered": fired,
+                }
+                is_ext = fired
+
+        if logger is not None:
+            logger.log_generation(actual_gen, fits_np, is_ext, mean_topk, trigger_info, archive_size=fits_np.size)
+
+        if is_ext:
+            logging.info("Extinction event...")
+            random_key, subkey = jax.random.split(random_key)
+            repertoire = repertoire.extinction(
+                remaining_prop=cfg.remaining_prop, random_key=subkey
+            )
+            _last_extinction_iter = i
+
         # AE
         if (i + 1) in schedules and not cfg.no_training:
             logging.info("Updating AE...")
             start_time = time.time()
+            # cache encoder state for drift computation
+            if logger is not None:
+                _old_extra_info = aurora_extra_info
             # train the autoencoder
             random_key, subkey = jax.random.split(random_key)
             if cfg.reinit_params:
@@ -107,6 +202,17 @@ def train(
                 lambda metric: "{0:.4f}".format(float(metric[-1])), model_metrics
             )
             logging.info(metrics_last_iter)
+            if logger is not None:
+                _valid = repertoire.fitnesses != -jnp.inf
+                _descs = np.asarray(repertoire.descriptors[_valid])
+                logger.log_encoder_retrain(
+                    generation=(i + 1) * cfg.metrics_log_period,
+                    model_metrics=model_metrics,
+                    old_aurora_extra_info=_old_extra_info,
+                    new_aurora_extra_info=aurora_extra_info,
+                    encoder_fn=aurora._encoder_fn,
+                    archived_descriptors=_descs,
+                )
 
         # CSC
         elif i % 2 == 0 and not cfg.no_csc:
@@ -138,12 +244,15 @@ def train(
         else:
             logged_metrics["l_value"] = repertoire.l_value
 
+        logged_metrics["mean_fitness_top_k"] = mean_topk
+
         logging.info(
             f"Generation {i + 1}/{num_generations} - Time: {timelapse:.2f} seconds"
         )
         metrics_last_iter = jax.tree_util.tree_map(
             lambda metric: "{0:.2f}".format(float(metric[-1])), metrics
         )
+        metrics_last_iter["mean_fitness_top_k"] = f"{mean_topk:.2f}"
         logging.info(metrics_last_iter)
         if (i + 1) in schedules and not cfg.no_training:
             # Log all AE training metrics
@@ -155,18 +264,6 @@ def train(
         logged_metrics, all_metrics = log_running_metrics(
             metrics, logged_metrics, all_metrics, step=total_evaluations
         )
-
-        # Every n generations, remove all but n% of individuals
-        if cfg.extinction:
-            if i == num_generations - 1:
-                # Don't do an extinction event on the last generation
-                pass
-            if (i + 1) % cfg.extinction_freq == 0:
-                logging.info("Extinction event...")
-                random_key, subkey = jax.random.split(random_key)
-                repertoire = repertoire.extinction(
-                    remaining_prop=cfg.remaining_prop, random_key=subkey
-                )
 
     return all_metrics, repertoire, passive_repertoire, (min_obs, max_obs)
 
@@ -414,6 +511,23 @@ def main(cfg: DictConfig) -> None:
             repertoire, train_state, random_key=subkey
         )
 
+        # Set up trigger signal logger
+        _ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        _run_dir = Path("runs") / f"{_ts}_{cfg.env.name}_seed{cfg.seed}"
+        logger = MetricsLogger(run_dir=_run_dir, seed=cfg.seed)
+        logger.set_drift_sample(repertoire, aurora_extra_info, aurora._encoder_fn)
+        OmegaConf.save(
+            OmegaConf.create({
+                "env": cfg.env.name,
+                "seed": int(cfg.seed),
+                "extinction_mode": str(cfg.extinction_mode),
+                "top_k_percent": int(cfg.top_k_percent),
+                "adaptive_extinction": OmegaConf.to_container(cfg.adaptive_extinction),
+            }),
+            str(_run_dir / "config.yaml"),
+        )
+        logging.info(f"Trigger signal logger writing to {_run_dir.resolve()}")
+
         metrics, repertoire, passive_repertoire, obs_data = train(
             cfg=cfg,
             aurora_scan_update=update_scan_fn,
@@ -423,7 +537,11 @@ def main(cfg: DictConfig) -> None:
             passive_repertoire=passive_repertoire,
             aurora=aurora,
             random_key=random_key,
+            logger=logger,
         )
+
+        logger.flush()
+        logging.info(f"Trigger signal log saved to {_run_dir}")
 
         total_duration = time.time() - init_time
 

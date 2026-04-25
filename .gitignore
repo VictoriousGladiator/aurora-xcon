@@ -3,3 +3,5 @@ __pycache__/
 blob/
 *tmp/
 *.sif
+output/
+wandb/
