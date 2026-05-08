@@ -1,5 +1,6 @@
 name: kheperax
-reward_type: final
+reward_type: final              # "final" | "final_speed"
+speed_bonus_factor: 1.0        # only used when reward_type=final_speed; bonus = steps_remaining / factor
 
 episode_length: 200
 resolution: [64, 64]

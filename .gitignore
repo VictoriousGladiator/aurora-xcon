@@ -5,3 +5,4 @@ blob/
 *.sif
 output/
 wandb/
+teo_venv.txt

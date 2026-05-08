@@ -22,8 +22,11 @@ def _make_title(run_dir: Path) -> str:
         return run_dir.name
     cfg = OmegaConf.load(str(cfg_path))
     ae = cfg.get("adaptive_extinction", {})
+    reward = cfg.get("reward_type", "final")
+    reward_str = f"final_speed(f={cfg.get('speed_bonus_factor', 1.0)})" if reward == "final_speed" else reward
     return (
         f"{cfg.get('env', '?')} | seed={cfg.get('seed', '?')} | "
+        f"fitness={reward_str} | "
         f"mode={cfg.get('extinction_mode', '?')} | "
         f"top_k={cfg.get('top_k_percent', '?')}% | "
         f"patience={ae.get('patience', '?')} | "

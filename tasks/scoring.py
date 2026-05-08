@@ -20,7 +20,7 @@ from qdax.tasks.brax_envs import get_mask_from_transitions
 
 
 def compute_fitnesses(
-    data: QDTransition, mask: jnp.array, reward_type: str
+    data: QDTransition, mask: jnp.array, reward_type: str, speed_bonus_factor: float = 1.0
 ) -> Tuple[jnp.array, jnp.array]:
     """
     Compute fitnesses for the active and passive archive.
@@ -50,6 +50,15 @@ def compute_fitnesses(
     elif reward_type == "final":
         last_index = jnp.int32(jnp.sum(1.0 - mask, axis=1)) - 1
         fitnesses = jax.vmap(lambda x, y: x[y])(data.rewards, last_index)
+    elif reward_type == "final_speed":
+        # Base: final-distance reward (same as "final" — negative when not reached, 0.0 when reached).
+        # Bonus: steps_remaining / factor added only when the goal was reached (steps_remaining > 0).
+        # Net effect: not reached → same negative distance signal; reached → positive speed reward.
+        last_index = jnp.int32(jnp.sum(1.0 - mask, axis=1)) - 1
+        distance_fitness = jax.vmap(lambda x, y: x[y])(data.rewards, last_index)
+        n_active = jnp.sum(1.0 - mask, axis=1)
+        steps_remaining = mask.shape[1] - n_active  # 0 if not reached, >0 if reached
+        fitnesses = distance_fitness + steps_remaining / speed_bonus_factor
     else:
         fitnesses = jnp.sum(data.rewards * (1.0 - mask), axis=1)
 
@@ -97,6 +106,7 @@ def scoring_function(
         data,
         mask,
         cfg.env.reward_type,
+        speed_bonus_factor=float(getattr(cfg.env, "speed_bonus_factor", 1.0)),
     )
 
     return (

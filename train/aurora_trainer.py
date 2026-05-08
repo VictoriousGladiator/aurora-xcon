@@ -523,6 +523,8 @@ def main(cfg: DictConfig) -> None:
                 "extinction_mode": str(cfg.extinction_mode),
                 "top_k_percent": int(cfg.top_k_percent),
                 "adaptive_extinction": OmegaConf.to_container(cfg.adaptive_extinction),
+                "reward_type": str(cfg.env.reward_type),
+                "speed_bonus_factor": float(getattr(cfg.env, "speed_bonus_factor", 1.0)),
             }),
             str(_run_dir / "config.yaml"),
         )

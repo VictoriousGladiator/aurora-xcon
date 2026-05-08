@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(Get-ChildItem -Path \"c:\\\\Users\\\\pazer\\\\Desktop\\\\RU\\\\2\\\\natComp\\\\project_collab\\\\aurora-xcon\\\\output\\\\\" -Directory | ForEach-Object { $_.Name })",
+      "PowerShell(Get-ChildItem -Path \"c:\\\\Users\\\\pazer\\\\Desktop\\\\RU\\\\2\\\\natComp\\\\project_collab\\\\aurora-xcon\\\\output\\\\2026-04-25\\\\\" -Directory | ForEach-Object { $_.Name })"
+    ]
+  }
+}
