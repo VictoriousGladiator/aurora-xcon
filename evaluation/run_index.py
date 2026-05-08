@@ -128,6 +128,10 @@ def condition_label(cfg: dict) -> str:
         return "no_extinction"
     if mode == "static":
         return "static"
+    if mode == "encoder_post":
+        return "encoder_post"
+    if mode == "random_encoder_rate":
+        return "enc_random_rate"
 
     topk = int(cfg["top_k_percent"])
     patience = int(cfg["patience"])

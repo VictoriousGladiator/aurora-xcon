@@ -36,6 +36,8 @@ CONDITION_ORDER = [
     "adaptive_patience20",
     "adaptive_alpha01",
     "adaptive_alpha03",
+    "encoder_post",
+    "enc_random_rate",
 ]
 
 CONDITION_LABELS: dict[str, str] = {
@@ -48,6 +50,8 @@ CONDITION_LABELS: dict[str, str] = {
     "adaptive_patience20": "patience=20",
     "adaptive_alpha01":  "α=0.1",
     "adaptive_alpha03":  "α=0.3",
+    "encoder_post":      "Post-Encoder",
+    "enc_random_rate":   "Enc. Rate (random)",
 }
 
 # Metrics to plot: (csv_column, y-label, apply_offset_for_final)
@@ -96,6 +100,7 @@ def _plot_metric(
     column: str,
     ylabel: str,
     figures_dir: Path,
+    suffix: str = "",
 ) -> None:
     present = [c for c in CONDITION_ORDER if c in groups and groups[c]]
     # Also include any conditions not in CONDITION_ORDER (e.g. new modes)
@@ -145,7 +150,7 @@ def _plot_metric(
 
     fig.tight_layout()
     figures_dir.mkdir(parents=True, exist_ok=True)
-    out_path = figures_dir / f"evolution_{column}.png"
+    out_path = figures_dir / f"evolution_{column}{suffix}.png"
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         fig.savefig(out_path, dpi=150, bbox_inches="tight")
@@ -153,36 +158,72 @@ def _plot_metric(
     print(f"Saved: {out_path}")
 
 
-def main() -> None:
-    reward_type = "final"
+def _parse_args() -> tuple[str, list[str] | None, str | None]:
     args = sys.argv[1:]
-    for i, a in enumerate(args):
+    reward_type = "final"
+    conditions: list[str] | None = None
+    tag: str | None = None
+    i = 0
+    while i < len(args):
+        a = args[i]
         if a == "--reward" and i + 1 < len(args):
-            reward_type = args[i + 1]
+            reward_type = args[i + 1]; i += 2
         elif a.startswith("--reward="):
-            reward_type = a.split("=", 1)[1]
+            reward_type = a.split("=", 1)[1]; i += 1
+        elif a == "--tag" and i + 1 < len(args):
+            tag = args[i + 1]; i += 2
+        elif a.startswith("--tag="):
+            tag = a.split("=", 1)[1]; i += 1
+        elif a == "--conditions":
+            conditions = []
+            i += 1
+            while i < len(args) and not args[i].startswith("--"):
+                conditions.append(args[i]); i += 1
+        else:
+            i += 1
+    return reward_type, conditions, tag
 
+
+def _file_tag(condition_filter: list[str] | None, tag: str | None) -> str:
+    if tag:
+        return f"_{tag}"
+    if condition_filter:
+        joined = "+".join(condition_filter)
+        return f"_{joined}" if len(joined) <= 60 else f"_{joined[:57]}..."
+    return ""
+
+
+def main() -> None:
+    reward_type, condition_filter, tag = _parse_args()
+    suffix = _file_tag(condition_filter, tag)
     figures_dir = _EVAL_DIR / "figures" / reward_type
 
     runs = scan_runs(_PROJECT_ROOT)
     complete = [r for r in runs if r["is_complete"] and r.get("reward_type", "final") == reward_type]
-    print(f"Found {len(complete)} complete {reward_type} run(s).\n")
+    print(f"Found {len(complete)} complete {reward_type} run(s).")
 
     if not complete:
         print(f"No complete runs with reward_type='{reward_type}'.")
         return
 
+    all_labels = sorted({condition_label(r) for r in complete})
+    print(f"All conditions in data: {all_labels}")
+    if condition_filter:
+        print(f"Plotting subset: {condition_filter}")
+    print()
+
     for column, ylabel in METRIC_CONFIGS:
         print(f"Building evolution plot: {column}")
-        # Group series by condition
         groups: dict[str, list[pd.Series]] = {}
         for run_info in complete:
-            label = condition_label(run_info)
+            lbl = condition_label(run_info)
+            if condition_filter and lbl not in condition_filter:
+                continue
             series = _load_series(run_info["run_dir"], column)
             if series is not None:
-                groups.setdefault(label, []).append(series)
+                groups.setdefault(lbl, []).append(series)
 
-        _plot_metric(groups, column, ylabel, figures_dir)
+        _plot_metric(groups, column, ylabel, figures_dir, suffix)
 
     print(f"\nAll evolution plots saved to {figures_dir}")
 

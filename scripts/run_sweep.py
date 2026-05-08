@@ -64,6 +64,12 @@ CONDITIONS = [
     dict(top_k_percent=20, extinction_mode="static", extinction_freq=10, remaining_prop=0.05),
 ]
 
+# Separate subset for encoder-coupled extinction experiments
+ENCODER_CONDITIONS = [
+    dict(top_k_percent=20, extinction_mode="encoder_post"),
+    dict(top_k_percent=20, extinction_mode="random_encoder_rate"),
+]
+
 SEEDS = [20, 42, 7, 13, 99]
 EXPERIMENTS = [dict(seed=s, **c) for c in CONDITIONS for s in SEEDS]
 
@@ -114,6 +120,10 @@ def _experiment_key(exp: dict, reward_type: str) -> str:
         cond = "no_extinction"
     elif mode == "static":
         cond = f"static_f{exp.get('extinction_freq', 10)}"
+    elif mode == "encoder_post":
+        cond = "encoder_post"
+    elif mode == "random_encoder_rate":
+        cond = "enc_random_rate"
     else:
         if topk != 20:
             cond = f"topk{topk}"
@@ -297,7 +307,7 @@ def _short_label(exp: dict) -> str:
 # Argument parsing
 # ---------------------------------------------------------------------------
 
-def _parse_args() -> tuple[bool, bool, bool, int, str, float]:
+def _parse_args() -> tuple[bool, bool, bool, int, str, float, str]:
     args = sys.argv[1:]
     dry_run = "--dry-run" in args
     check   = "--check"   in args
@@ -305,6 +315,7 @@ def _parse_args() -> tuple[bool, bool, bool, int, str, float]:
     workers = 1
     reward_type = _DEFAULT_REWARD
     speed_bonus_factor = 1.0
+    subset = "main"   # "main" | "encoder"
     for i, a in enumerate(args):
         if a == "--workers" and i + 1 < len(args):
             try:
@@ -330,19 +341,29 @@ def _parse_args() -> tuple[bool, bool, bool, int, str, float]:
                 speed_bonus_factor = float(a.split("=", 1)[1])
             except ValueError:
                 pass
+        elif a == "--subset" and i + 1 < len(args):
+            subset = args[i + 1]
+        elif a.startswith("--subset="):
+            subset = a.split("=", 1)[1]
     if reward_type not in _REWARD_TYPES:
         print(f"ERROR: unknown --reward '{reward_type}'. Choose from: {_REWARD_TYPES}")
         sys.exit(1)
-    return dry_run, check, verbose, workers, reward_type, speed_bonus_factor
+    if subset not in ("main", "encoder"):
+        print(f"ERROR: unknown --subset '{subset}'. Choose from: main, encoder")
+        sys.exit(1)
+    return dry_run, check, verbose, workers, reward_type, speed_bonus_factor, subset
 
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    dry_run, check_mode, verbose, n_workers, reward_type, speed_bonus_factor = _parse_args()
+    dry_run, check_mode, verbose, n_workers, reward_type, speed_bonus_factor, subset = _parse_args()
     project_root = Path(__file__).parent.parent
-    n = len(EXPERIMENTS)
+
+    conditions = ENCODER_CONDITIONS if subset == "encoder" else CONDITIONS
+    experiments = [dict(seed=s, **c) for c in conditions for s in SEEDS]
+    n = len(experiments)
 
     reward_overrides = [f"env.reward_type={reward_type}"]
     if reward_type == "final_speed":
@@ -351,7 +372,7 @@ def main() -> None:
     if check_mode:
         print(f"Checking {n} (condition, seed) pairs  [reward={reward_type}]...\n")
         complete = 0
-        for i, exp in enumerate(EXPERIMENTS, 1):
+        for i, exp in enumerate(experiments, 1):
             run_dir = _find_complete_run(project_root, exp, reward_type)
             label   = _short_label(exp)
             status  = f"[DONE]    {run_dir}" if run_dir else "[MISSING]"
@@ -362,15 +383,15 @@ def main() -> None:
         return
 
     if dry_run:
-        print(f"Dry run — {n} commands  [reward={reward_type}]:\n")
-        for exp in EXPERIMENTS:
+        print(f"Dry run — {n} commands  [subset={subset}, reward={reward_type}]:\n")
+        for exp in experiments:
             key = _experiment_key(exp, reward_type)
             extra = list(reward_overrides) + [f"hydra.run.dir=output/{key}"]
             print("$ " + " ".join(_build_cmd(exp, extra)))
         return
 
     print("Scanning for completed runs...", flush=True)
-    pending = [exp for exp in EXPERIMENTS if _find_complete_run(project_root, exp, reward_type) is None]
+    pending = [exp for exp in experiments if _find_complete_run(project_root, exp, reward_type) is None]
     n_skip  = n - len(pending)
     if n_skip:
         print(f"Skipping {n_skip} already-complete run(s).")
@@ -380,7 +401,7 @@ def main() -> None:
 
     parallel = n_workers > 1
     mode_str = f"parallel ×{n_workers}" if parallel else "sequential"
-    print(f"Running {len(pending)} experiment(s)  [{mode_str}, reward={reward_type}, wandb=offline].\n")
+    print(f"Running {len(pending)} experiment(s)  [subset={subset}, {mode_str}, reward={reward_type}, wandb=offline].\n")
 
     if parallel:
         completed = 0

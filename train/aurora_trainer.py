@@ -101,6 +101,10 @@ def train(
     update_base = int(jnp.ceil(default_update_base / cfg.metrics_log_period))
     schedules = jnp.cumsum(jnp.arange(update_base, num_generations, update_base))
 
+    # Pre-compute expected encoder training count for random_encoder_rate mode
+    _n_enc = int(jnp.sum(schedules <= num_generations))
+    _p_random_ext = float(_n_enc) / max(1, num_generations)
+
     _top_k_history: collections.deque = collections.deque(
         maxlen=5 * cfg.adaptive_extinction.patience + 1
     )
@@ -171,11 +175,19 @@ def train(
                     "triggered": fired,
                 }
                 is_ext = fired
+            elif cfg.extinction_mode == "encoder_post":
+                # Logged as extinction on this iteration; applied after encoder retrains below.
+                is_ext = bool((i + 1) in schedules) and not cfg.no_training
+            elif cfg.extinction_mode == "random_encoder_rate":
+                # Stochastic trigger with same expected frequency as encoder training.
+                random_key, subkey = jax.random.split(random_key)
+                is_ext = bool(jax.random.bernoulli(subkey, p=_p_random_ext))
 
         if logger is not None:
             logger.log_generation(actual_gen, fits_np, is_ext, mean_topk, trigger_info, archive_size=fits_np.size)
 
-        if is_ext:
+        # Apply extinction before encoder (all modes except encoder_post)
+        if is_ext and cfg.extinction_mode != "encoder_post":
             logging.info("Extinction event...")
             random_key, subkey = jax.random.split(random_key)
             repertoire = repertoire.extinction(
@@ -198,6 +210,15 @@ def train(
                 repertoire, train_state, subkey
             )
             ae_timelapse = time.time() - start_time
+
+            # encoder_post: apply extinction after encoder retraining
+            if is_ext and cfg.extinction_mode == "encoder_post":
+                logging.info("Extinction event (post-encoder)...")
+                random_key, subkey = jax.random.split(random_key)
+                repertoire = repertoire.extinction(
+                    remaining_prop=cfg.remaining_prop, random_key=subkey
+                )
+                _last_extinction_iter = i
             metrics_last_iter = jax.tree_util.tree_map(
                 lambda metric: "{0:.4f}".format(float(metric[-1])), model_metrics
             )

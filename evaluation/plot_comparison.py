@@ -29,6 +29,8 @@ CONDITION_ORDER = [
     "adaptive_patience20",
     "adaptive_alpha01",
     "adaptive_alpha03",
+    "encoder_post",
+    "enc_random_rate",
 ]
 
 CONDITION_LABELS: dict[str, str] = {
@@ -41,6 +43,8 @@ CONDITION_LABELS: dict[str, str] = {
     "adaptive_patience20": "patience\n=20",
     "adaptive_alpha01":  "α=0.1",
     "adaptive_alpha03":  "α=0.3",
+    "encoder_post":      "Post-\nEncoder",
+    "enc_random_rate":   "Enc. Rate\n(random)",
 }
 
 METRIC_CONFIGS = [
@@ -62,7 +66,7 @@ def _apply_style() -> None:
             continue
 
 
-def _plot_metric(df: pd.DataFrame, metric: str, ylabel: str, figures_dir: Path) -> None:
+def _plot_metric(df: pd.DataFrame, metric: str, ylabel: str, figures_dir: Path, suffix: str = "") -> None:
     present = [c for c in CONDITION_ORDER if c in df["condition_label"].values]
     n = len(present)
 
@@ -116,20 +120,51 @@ def _plot_metric(df: pd.DataFrame, metric: str, ylabel: str, figures_dir: Path) 
 
     fig.tight_layout()
     figures_dir.mkdir(parents=True, exist_ok=True)
-    out_path = figures_dir / f"comparison_{metric}.png"
+    out_path = figures_dir / f"comparison_{metric}{suffix}.png"
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"Saved: {out_path}")
 
 
-def main() -> None:
-    reward_type = "final"
+def _parse_args() -> tuple[str, list[str] | None, str | None]:
     args = sys.argv[1:]
-    for i, a in enumerate(args):
+    reward_type = "final"
+    conditions: list[str] | None = None
+    tag: str | None = None
+    i = 0
+    while i < len(args):
+        a = args[i]
         if a == "--reward" and i + 1 < len(args):
-            reward_type = args[i + 1]
+            reward_type = args[i + 1]; i += 2
         elif a.startswith("--reward="):
-            reward_type = a.split("=", 1)[1]
+            reward_type = a.split("=", 1)[1]; i += 1
+        elif a == "--tag" and i + 1 < len(args):
+            tag = args[i + 1]; i += 2
+        elif a.startswith("--tag="):
+            tag = a.split("=", 1)[1]; i += 1
+        elif a == "--conditions":
+            conditions = []
+            i += 1
+            while i < len(args) and not args[i].startswith("--"):
+                conditions.append(args[i]); i += 1
+        else:
+            i += 1
+    return reward_type, conditions, tag
+
+
+def _file_tag(condition_filter: list[str] | None, tag: str | None) -> str:
+    """Return a filename suffix: explicit tag > auto from conditions > empty."""
+    if tag:
+        return f"_{tag}"
+    if condition_filter:
+        joined = "+".join(condition_filter)
+        return f"_{joined}" if len(joined) <= 60 else f"_{joined[:57]}..."
+    return ""
+
+
+def main() -> None:
+    reward_type, condition_filter, tag = _parse_args()
+    suffix = _file_tag(condition_filter, tag)
 
     summary_csv = _EVAL_DIR / f"metrics_summary_{reward_type}.csv"
     figures_dir = _EVAL_DIR / "figures" / reward_type
@@ -137,14 +172,23 @@ def main() -> None:
     if not summary_csv.exists():
         raise FileNotFoundError(
             f"{summary_csv} not found. "
-            f"Run `python evaluation/compute_metrics.py --reward {reward_type}` first."
+            f"Run `python -m evaluation.compute_metrics --reward {reward_type}` first."
         )
     df = pd.read_csv(summary_csv)
+
+    all_conds = sorted(df["condition_label"].unique())
     print(f"Loaded {len(df)} rows from {summary_csv}")
-    print(f"Conditions in data: {sorted(df['condition_label'].unique())}\n")
+    print(f"All conditions in data: {all_conds}")
+
+    if condition_filter:
+        df = df[df["condition_label"].isin(condition_filter)]
+        print(f"Plotting subset: {condition_filter}")
+    if suffix:
+        print(f"File suffix: {suffix}")
+    print()
 
     for metric, ylabel in METRIC_CONFIGS:
-        _plot_metric(df, metric, ylabel, figures_dir)
+        _plot_metric(df, metric, ylabel, figures_dir, suffix)
 
     print(f"\nAll plots saved to {figures_dir}")
 
