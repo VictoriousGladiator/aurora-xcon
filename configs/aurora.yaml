@@ -67,6 +67,15 @@ adaptive_extinction:
   d_min_warmup: 50     # outer iterations before eligible
   d_min_cooldown: 10   # outer iterations after an extinction before re-trigger
 
+  # hybrid d_min_trigger (stagnation + top-k fitness + emergency high d_min)
+  d_min_window: 15
+  fitness_window: 15
+  d_min_stagnation_threshold: 0.01
+  fitness_improvement_threshold: 0.02
+  high_d_min_threshold: 0.95
+  high_d_min_patience: 30
+  fitness_patience: 10
+
   # ramped proportion params (used by static_ramped_proportion mode)
   ramped_prop_min: 0.05
   ramped_prop_max: 0.40

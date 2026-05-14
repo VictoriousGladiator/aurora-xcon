@@ -1,0 +1,25 @@
+services:
+  aurora:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    image: aurora-xcon:latest
+    container_name: aurora-xcon
+    volumes:
+      - .:/workspace/src
+      - aurora-outputs:/workspace/src/output
+      - aurora-wandb:/workspace/src/wandb
+    stdin_open: true
+    tty: true
+    working_dir: /workspace/src
+    environment:
+      - CUDA_VISIBLE_DEVICES=
+      - JAX_PLATFORM_NAME=cpu
+      - WANDB_API_KEY=${WANDB_API_KEY:-}
+      - HYDRA_FULL_ERROR=1
+    command: /bin/bash
+
+volumes:
+  aurora-outputs:
+  aurora-wandb:

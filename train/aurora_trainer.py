@@ -74,7 +74,7 @@ def _check_fitness_trigger(
     return triggered, recent_rate, historical_rate, ratio
 
 
-def _check_dmin_trigger(
+'''def _check_dmin_trigger(
     history: collections.deque,
     last_ext_iter: int,
     current_iter: int,
@@ -103,7 +103,119 @@ def _check_dmin_trigger(
         return False, recent_vol, historical_vol, nan
     ratio = recent_vol / historical_vol
     triggered = bool(ratio < ae_cfg.d_min_alpha)
-    return triggered, recent_vol, historical_vol, ratio
+    return triggered, recent_vol, historical_vol, ratio'''
+
+def _check_hybrid_trigger(
+    dmin_history: collections.deque,
+    fitness_history: collections.deque,
+    last_ext_iter: int,
+    current_iter: int,
+    state,
+    ae_cfg,
+) -> tuple:
+    """
+    Return:
+        (
+            triggered,
+            dmin_range,
+            relative_fitness_improvement,
+        )
+
+    Triggers when:
+      1. d_min stagnates AND fitness stagnates
+      OR
+      2. d_min remains very high for too long
+    """
+    nan = float("nan")
+
+    # Warmup / cooldown
+    if current_iter < ae_cfg.d_min_warmup:
+        return False, nan, nan
+
+    if current_iter - last_ext_iter < ae_cfg.d_min_cooldown:
+        return False, nan, nan
+
+    # Need enough history
+    if len(dmin_history) < ae_cfg.d_min_window:
+        return False, nan, nan
+
+    if len(fitness_history) < ae_cfg.fitness_window:
+        return False, nan, nan
+
+    # d_min stagnation
+    d_hist = list(dmin_history)
+
+    dmin_range = max(d_hist) - min(d_hist)
+
+    dmin_stagnating = (
+        dmin_range < ae_cfg.d_min_stagnation_threshold
+    )
+
+    # Fitness stagnation
+    f_hist = list(fitness_history)
+
+    start_fit = f_hist[0]
+    end_fit = f_hist[-1]
+
+    rel_improvement = (
+        (end_fit - start_fit)
+        / (abs(start_fit) + 1e-8)
+    )
+
+    fitness_stagnating = (
+        rel_improvement
+        < ae_cfg.fitness_improvement_threshold
+    )
+
+    # Accumulate patience counters
+    state["dmin_stagnant_count"] = (
+        state["dmin_stagnant_count"] + 1
+        if dmin_stagnating
+        else 0
+    )
+
+    state["fitness_stagnant_count"] = (
+        state["fitness_stagnant_count"] + 1
+        if fitness_stagnating
+        else 0
+    )
+
+    # Emergency high-d_min trigger
+    current_dmin = d_hist[-1]
+
+    state["high_dmin_count"] = (
+        state["high_dmin_count"] + 1
+        if current_dmin > ae_cfg.high_d_min_threshold
+        else 0
+    )
+
+    emergency_trigger = (
+        state["high_dmin_count"]
+        >= ae_cfg.high_d_min_patience
+    )
+
+    # Main trigger
+    hybrid_trigger = (
+        state["dmin_stagnant_count"]
+        >= ae_cfg.d_min_patience
+        and
+        state["fitness_stagnant_count"]
+        >= ae_cfg.fitness_patience
+    )
+
+    triggered = emergency_trigger or hybrid_trigger
+
+    # Reset after trigger
+    if triggered:
+        state["dmin_stagnant_count"] = 0
+        state["fitness_stagnant_count"] = 0
+        state["high_dmin_count"] = 0
+
+    return (
+        triggered,
+        dmin_range,
+        rel_improvement,
+    )
 
 
 def train(
@@ -141,10 +253,21 @@ def train(
     _top_k_history: collections.deque = collections.deque(
         maxlen=5 * cfg.adaptive_extinction.patience + 1
     )
-    _dmin_history: collections.deque = collections.deque(
-        maxlen=5 * cfg.adaptive_extinction.d_min_patience + 1
-    )
     _last_extinction_iter: int = 0
+
+    _dmin_history = collections.deque(
+        maxlen=cfg.adaptive_extinction.d_min_window
+    )
+
+    _fitness_history = collections.deque(
+        maxlen=cfg.adaptive_extinction.fitness_window
+    )
+
+    _trigger_state = {
+        "dmin_stagnant_count": 0,
+        "fitness_stagnant_count": 0,
+        "high_dmin_count": 0,
+    }
 
     for i in range(num_generations):
 
@@ -187,6 +310,7 @@ def train(
         else:
             mean_topk = float("nan")
         _top_k_history.append(mean_topk)
+        _fitness_history.append(mean_topk)
 
         # d_min signal (only meaningful for adaptive repertoire)
         if cfg.repertoire == "adaptive":
@@ -225,15 +349,24 @@ def train(
                 assert cfg.repertoire == "adaptive", (
                     "extinction_mode=d_min_trigger requires repertoire=adaptive"
                 )
-                fired, rv, hv, ratio = _check_dmin_trigger(
-                    _dmin_history, _last_extinction_iter, i, cfg.adaptive_extinction
+
+                fired, dmin_range, fit_improvement = _check_hybrid_trigger(
+                    dmin_history=_dmin_history,
+                    fitness_history=_fitness_history,
+                    last_ext_iter=_last_extinction_iter,
+                    current_iter=i,
+                    state=_trigger_state,
+                    ae_cfg=cfg.adaptive_extinction,
                 )
+
+                # metrics_logger / wandb reuse volatility column names for these scalars
                 dmin_trigger_info = {
-                    "recent_volatility": rv,
-                    "historical_volatility": hv,
-                    "ratio": ratio,
+                    "recent_volatility": dmin_range,
+                    "historical_volatility": fit_improvement,
+                    "ratio": _nan,
                     "triggered": fired,
                 }
+
                 is_ext = fired
             elif cfg.extinction_mode == "static_ramped_proportion":
                 is_ext = (i + 1) % cfg.extinction_freq == 0

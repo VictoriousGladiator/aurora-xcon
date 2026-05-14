@@ -5,11 +5,11 @@ omegaconf
 wandb
 plotly
 tqdm
-brax
+brax==0.9.2
 numpy
 scipy
 jax[cuda12_pip]==0.4.35
-flax
+flax==0.8.5
 scikit-learn
 statsmodels
 seaborn
