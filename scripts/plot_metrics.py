@@ -74,7 +74,46 @@ def plot_run(run_dir: Path):
     plt.close(fig)
     print(f"Saved: {out / 'fitness.png'}")
 
-    # --- trigger internals (only when columns are present and non-empty) ---
+    # --- d_min volatility internals (d_min_trigger mode) ---
+    dmin_cols = ["d_min_recent_volatility", "d_min_historical_volatility", "d_min_volatility_ratio"]
+    if all(c in m.columns for c in dmin_cols) and m[dmin_cols].notna().any().any():
+        cfg_path = run_dir / "config.yaml"
+        d_alpha = None
+        if cfg_path.exists():
+            cfg = OmegaConf.load(str(cfg_path))
+            d_alpha = cfg.get("adaptive_extinction", {}).get("d_min_alpha")
+
+        labels_d = [
+            "recent volatility $v_{\\mathrm{recent}}$",
+            "historical volatility $v_{\\mathrm{hist}}$",
+            "ratio $v_{\\mathrm{recent}} / v_{\\mathrm{hist}}$",
+        ]
+        fig3, axes3 = plt.subplots(3, 1, figsize=(10, 7), sharex=True)
+        fig3.suptitle(title + " — d_min volatility", fontsize=9, y=1.01)
+
+        for ax, col, label in zip(axes3, dmin_cols, labels_d):
+            ax.plot(m["generation"], m[col], linewidth=1.2)
+            ax.set_ylabel(label, fontsize=8)
+            ax.tick_params(labelsize=7)
+            _mark_extinctions(ax, gens_extinct)
+
+        if d_alpha is not None:
+            axes3[2].axhline(d_alpha, color="orange", linestyle="--",
+                             linewidth=1.0, label=f"d_min_α={d_alpha}")
+            axes3[2].legend(fontsize=7)
+
+        if gens_extinct:
+            axes3[0].axvline(gens_extinct[0], color="red", alpha=0.3,
+                             linewidth=1.0, label="extinction")
+            axes3[0].legend(fontsize=7)
+
+        axes3[-1].set_xlabel("generation")
+        fig3.tight_layout()
+        fig3.savefig(out / "dmin_trigger.png", dpi=130, bbox_inches="tight")
+        plt.close(fig3)
+        print(f"Saved: {out / 'dmin_trigger.png'}")
+
+    # --- fitness trigger internals (fitness_trigger mode) ---
     trigger_cols = ["trigger_recent_rate", "trigger_historical_rate", "trigger_ratio"]
     if all(c in m.columns for c in trigger_cols) and m[trigger_cols].notna().any().any():
         cfg_path = run_dir / "config.yaml"

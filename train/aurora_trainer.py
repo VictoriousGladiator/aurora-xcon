@@ -42,7 +42,7 @@ from viz.visualization import kheperax_viz_best_individual, viz_best_individual
 from logging_utils.metrics_logger import MetricsLogger
 
 
-def _check_adaptive_trigger(
+def _check_fitness_trigger(
     history: collections.deque,
     last_ext_iter: int,
     current_iter: int,
@@ -52,6 +52,7 @@ def _check_adaptive_trigger(
 
     All window sizes are in outer-loop iterations (each = metrics_log_period gens).
     Requires 5*patience+1 history values before it can fire.
+    Uses signed deltas because fitness should trend upward.
     """
     nan = float("nan")
     p = ae_cfg.patience
@@ -71,6 +72,38 @@ def _check_adaptive_trigger(
     ratio = recent_rate / historical_rate
     triggered = bool(ratio < ae_cfg.alpha)
     return triggered, recent_rate, historical_rate, ratio
+
+
+def _check_dmin_trigger(
+    history: collections.deque,
+    last_ext_iter: int,
+    current_iter: int,
+    ae_cfg,
+) -> tuple:
+    """Return (fired, recent_volatility, historical_volatility, ratio).
+
+    Uses absolute deltas — d_min oscillates, so we care whether it has stopped
+    moving at all, not its direction. Fires when recent movement is small
+    relative to historical movement (ratio < d_min_alpha).
+    """
+    nan = float("nan")
+    p = ae_cfg.d_min_patience
+    if current_iter < ae_cfg.d_min_warmup:
+        return False, nan, nan, nan
+    if current_iter - last_ext_iter < ae_cfg.d_min_cooldown:
+        return False, nan, nan, nan
+    n = len(history)
+    if n < 5 * p + 1:
+        return False, nan, nan, nan
+    h = list(history)
+    abs_deltas = [abs(h[j] - h[j - 1]) for j in range(1, n)]
+    recent_vol = float(np.mean(abs_deltas[-p:]))
+    historical_vol = float(np.mean(abs_deltas[-5 * p:]))
+    if historical_vol < 1e-12:
+        return False, recent_vol, historical_vol, nan
+    ratio = recent_vol / historical_vol
+    triggered = bool(ratio < ae_cfg.d_min_alpha)
+    return triggered, recent_vol, historical_vol, ratio
 
 
 def train(
@@ -107,6 +140,9 @@ def train(
 
     _top_k_history: collections.deque = collections.deque(
         maxlen=5 * cfg.adaptive_extinction.patience + 1
+    )
+    _dmin_history: collections.deque = collections.deque(
+        maxlen=5 * cfg.adaptive_extinction.d_min_patience + 1
     )
     _last_extinction_iter: int = 0
 
@@ -152,6 +188,10 @@ def train(
             mean_topk = float("nan")
         _top_k_history.append(mean_topk)
 
+        # d_min signal (only meaningful for adaptive repertoire)
+        if cfg.repertoire == "adaptive":
+            _dmin_history.append(float(repertoire.d_min))
+
         # extinction decision
         _nan = float("nan")
         trigger_info = {
@@ -160,12 +200,18 @@ def train(
             "ratio": _nan,
             "triggered": False,
         }
+        dmin_trigger_info = {
+            "recent_volatility": _nan,
+            "historical_volatility": _nan,
+            "ratio": _nan,
+            "triggered": False,
+        }
         is_ext = False
         if i != num_generations - 1:
             if cfg.extinction_mode == "static":
                 is_ext = (i + 1) % cfg.extinction_freq == 0
-            elif cfg.extinction_mode == "adaptive":
-                fired, rr, hr, ratio = _check_adaptive_trigger(
+            elif cfg.extinction_mode == "fitness_trigger":
+                fired, rr, hr, ratio = _check_fitness_trigger(
                     _top_k_history, _last_extinction_iter, i, cfg.adaptive_extinction
                 )
                 trigger_info = {
@@ -175,6 +221,22 @@ def train(
                     "triggered": fired,
                 }
                 is_ext = fired
+            elif cfg.extinction_mode == "d_min_trigger":
+                assert cfg.repertoire == "adaptive", (
+                    "extinction_mode=d_min_trigger requires repertoire=adaptive"
+                )
+                fired, rv, hv, ratio = _check_dmin_trigger(
+                    _dmin_history, _last_extinction_iter, i, cfg.adaptive_extinction
+                )
+                dmin_trigger_info = {
+                    "recent_volatility": rv,
+                    "historical_volatility": hv,
+                    "ratio": ratio,
+                    "triggered": fired,
+                }
+                is_ext = fired
+            elif cfg.extinction_mode == "static_ramped_proportion":
+                is_ext = (i + 1) % cfg.extinction_freq == 0
             elif cfg.extinction_mode == "encoder_post":
                 # Logged as extinction on this iteration; applied after encoder retrains below.
                 is_ext = bool((i + 1) in schedules) and not cfg.no_training
@@ -183,15 +245,31 @@ def train(
                 random_key, subkey = jax.random.split(random_key)
                 is_ext = bool(jax.random.bernoulli(subkey, p=_p_random_ext))
 
+        # Compute remaining_prop for this potential extinction event.
+        # static_ramped_proportion ramps from prop_min to prop_max over training.
+        _remaining_prop = cfg.remaining_prop
+        if cfg.extinction_mode == "static_ramped_proportion" and is_ext:
+            progress = min(actual_gen / cfg.num_iterations, 1.0)
+            _remaining_prop = float(
+                cfg.adaptive_extinction.ramped_prop_min
+                + (cfg.adaptive_extinction.ramped_prop_max - cfg.adaptive_extinction.ramped_prop_min)
+                * progress
+            )
+
         if logger is not None:
-            logger.log_generation(actual_gen, fits_np, is_ext, mean_topk, trigger_info, archive_size=fits_np.size)
+            logger.log_generation(
+                actual_gen, fits_np, is_ext, mean_topk, trigger_info,
+                archive_size=fits_np.size,
+                dmin_trigger_info=dmin_trigger_info,
+                extinction_remaining_prop=_remaining_prop if is_ext else None,
+            )
 
         # Apply extinction before encoder (all modes except encoder_post)
         if is_ext and cfg.extinction_mode != "encoder_post":
             logging.info("Extinction event...")
             random_key, subkey = jax.random.split(random_key)
             repertoire = repertoire.extinction(
-                remaining_prop=cfg.remaining_prop, random_key=subkey
+                remaining_prop=_remaining_prop, random_key=subkey
             )
             _last_extinction_iter = i
 
@@ -216,7 +294,7 @@ def train(
                 logging.info("Extinction event (post-encoder)...")
                 random_key, subkey = jax.random.split(random_key)
                 repertoire = repertoire.extinction(
-                    remaining_prop=cfg.remaining_prop, random_key=subkey
+                    remaining_prop=_remaining_prop, random_key=subkey
                 )
                 _last_extinction_iter = i
             metrics_last_iter = jax.tree_util.tree_map(
@@ -266,6 +344,15 @@ def train(
             logged_metrics["l_value"] = repertoire.l_value
 
         logged_metrics["mean_fitness_top_k"] = mean_topk
+
+        if cfg.extinction_mode == "d_min_trigger":
+            logged_metrics["d_min_recent_volatility"] = dmin_trigger_info["recent_volatility"]
+            logged_metrics["d_min_historical_volatility"] = dmin_trigger_info["historical_volatility"]
+            logged_metrics["d_min_volatility_ratio"] = dmin_trigger_info["ratio"]
+            logged_metrics["d_min_trigger_fired"] = float(dmin_trigger_info["triggered"])
+        if is_ext:
+            logged_metrics["extinction_remaining_prop"] = _remaining_prop
+            logged_metrics["extinction_iter"] = actual_gen
 
         logging.info(
             f"Generation {i + 1}/{num_generations} - Time: {timelapse:.2f} seconds"

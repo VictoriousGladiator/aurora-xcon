@@ -38,7 +38,7 @@ BASE_CMD = [
     sys.executable, "-m", "main", "main", "aurora",
     "env=kheperax",
     "loss_type=triplet",
-    "extinction_mode=adaptive",
+    "extinction_mode=fitness_trigger",
     "hydra.verbose=false",
 ]
 
@@ -70,6 +70,20 @@ ENCODER_CONDITIONS = [
     dict(top_k_percent=20, extinction_mode="random_encoder_rate"),
 ]
 
+# New trigger experiments: d_min volatility trigger and static ramped proportion
+NEW_TRIGGER_CONDITIONS = [
+    # d_min volatility trigger — fixed prop=0.05
+    dict(top_k_percent=20, extinction_mode="d_min_trigger",
+         **{"adaptive_extinction.d_min_patience": 10,
+            "adaptive_extinction.d_min_alpha": 0.2,
+            "adaptive_extinction.d_min_cooldown": 10}),
+    # Periodic trigger with survival fraction ramped from 5% to 40% over training
+    dict(top_k_percent=20, extinction_mode="static_ramped_proportion",
+         extinction_freq=10,
+         **{"adaptive_extinction.ramped_prop_min": 0.05,
+            "adaptive_extinction.ramped_prop_max": 0.40}),
+]
+
 SEEDS = [20, 42, 7, 13, 99]
 EXPERIMENTS = [dict(seed=s, **c) for c in CONDITIONS for s in SEEDS]
 
@@ -77,7 +91,7 @@ EXPERIMENTS = [dict(seed=s, **c) for c in CONDITIONS for s in SEEDS]
 # Defaults matching aurora.yaml
 # ---------------------------------------------------------------------------
 _DEFAULTS: dict = {
-    "extinction_mode": "adaptive",
+    "extinction_mode": "fitness_trigger",
     "top_k_percent": 20,
     "adaptive_extinction.patience": 10,
     "adaptive_extinction.alpha": 0.2,
@@ -110,7 +124,7 @@ def _experiment_key(exp: dict, reward_type: str) -> str:
     Used as the Hydra run dir so parallel workers never share a timestamp folder.
     Example: 'final_topk10_seed20', 'final_speed_patience5_seed42'
     """
-    mode = exp.get("extinction_mode", "adaptive")
+    mode = exp.get("extinction_mode", "fitness_trigger")
     seed = exp.get("seed", 0)
     topk = int(exp.get("top_k_percent", 20))
     pat  = int(exp.get("adaptive_extinction.patience", 10))
@@ -124,6 +138,10 @@ def _experiment_key(exp: dict, reward_type: str) -> str:
         cond = "encoder_post"
     elif mode == "random_encoder_rate":
         cond = "enc_random_rate"
+    elif mode == "d_min_trigger":
+        cond = "d_min_trigger"
+    elif mode == "static_ramped_proportion":
+        cond = f"ramped_prop_f{exp.get('extinction_freq', 10)}"
     else:
         if topk != 20:
             cond = f"topk{topk}"
@@ -296,11 +314,18 @@ def _run_one(
 
 
 def _short_label(exp: dict) -> str:
-    mode  = exp.get("extinction_mode", "adaptive")
+    mode  = exp.get("extinction_mode", "fitness_trigger")
     topk  = exp.get("top_k_percent", 20)
     seed  = exp.get("seed", "?")
     pat   = exp.get("adaptive_extinction.patience", 10)
     alpha = exp.get("adaptive_extinction.alpha", 0.2)
+    if mode == "d_min_trigger":
+        dp = exp.get("adaptive_extinction.d_min_patience", 10)
+        da = exp.get("adaptive_extinction.d_min_alpha", 0.2)
+        return f"seed={seed} mode=d_min_trigger dp={dp} dα={da}"
+    if mode == "static_ramped_proportion":
+        freq = exp.get("extinction_freq", 10)
+        return f"seed={seed} mode=ramped_prop freq={freq}"
     return f"seed={seed} mode={mode} topk={topk} p={pat} α={alpha}"
 
 # ---------------------------------------------------------------------------
@@ -348,8 +373,8 @@ def _parse_args() -> tuple[bool, bool, bool, int, str, float, str]:
     if reward_type not in _REWARD_TYPES:
         print(f"ERROR: unknown --reward '{reward_type}'. Choose from: {_REWARD_TYPES}")
         sys.exit(1)
-    if subset not in ("main", "encoder"):
-        print(f"ERROR: unknown --subset '{subset}'. Choose from: main, encoder")
+    if subset not in ("main", "encoder", "new_triggers"):
+        print(f"ERROR: unknown --subset '{subset}'. Choose from: main, encoder, new_triggers")
         sys.exit(1)
     return dry_run, check, verbose, workers, reward_type, speed_bonus_factor, subset
 
@@ -361,7 +386,12 @@ def main() -> None:
     dry_run, check_mode, verbose, n_workers, reward_type, speed_bonus_factor, subset = _parse_args()
     project_root = Path(__file__).parent.parent
 
-    conditions = ENCODER_CONDITIONS if subset == "encoder" else CONDITIONS
+    if subset == "encoder":
+        conditions = ENCODER_CONDITIONS
+    elif subset == "new_triggers":
+        conditions = NEW_TRIGGER_CONDITIONS
+    else:
+        conditions = CONDITIONS
     experiments = [dict(seed=s, **c) for c in conditions for s in SEEDS]
     n = len(experiments)
 
@@ -384,6 +414,7 @@ def main() -> None:
 
     if dry_run:
         print(f"Dry run — {n} commands  [subset={subset}, reward={reward_type}]:\n")
+        # subset=new_triggers: 2 conditions × 5 seeds = 10 runs
         for exp in experiments:
             key = _experiment_key(exp, reward_type)
             extra = list(reward_overrides) + [f"hydra.run.dir=output/{key}"]

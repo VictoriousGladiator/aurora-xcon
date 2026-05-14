@@ -53,13 +53,23 @@ extinction_freq: 10
 remaining_prop: 0.05
 
 top_k_percent: 20
-extinction_mode: "off"   # "off" | "static" | "adaptive"
+extinction_mode: "off"   # "off" | "static" | "fitness_trigger" | "d_min_trigger" | "static_ramped_proportion"
 
 adaptive_extinction:
   warmup: 50    # outer iterations before trigger is eligible
   patience: 10  # recent window size (outer iterations)
   alpha: 0.2    # recent_rate / historical_rate threshold
   cooldown: 10  # outer iterations after an extinction before re-trigger
+
+  # d_min volatility trigger params
+  d_min_patience: 10   # recent window (outer iterations)
+  d_min_alpha: 0.2     # recent_vol / historical_vol threshold
+  d_min_warmup: 50     # outer iterations before eligible
+  d_min_cooldown: 10   # outer iterations after an extinction before re-trigger
+
+  # ramped proportion params (used by static_ramped_proportion mode)
+  ramped_prop_min: 0.05
+  ramped_prop_max: 0.40
 
 env_params:
   kheperax:

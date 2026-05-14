@@ -82,27 +82,41 @@ class MetricsLogger:
         mean_fitness_top_k: float,
         trigger_info: dict,
         archive_size: int = 0,
+        dmin_trigger_info: dict | None = None,
+        extinction_remaining_prop: float | None = None,
     ):
         """Log per-outer-iteration metrics.
 
         fitnesses is a pre-filtered numpy array of active archive fitnesses (empty slots removed).
         mean_fitness_top_k is pre-computed by the trainer (same sort used by the trigger).
         trigger_info keys: recent_rate, historical_rate, ratio, triggered.
+        dmin_trigger_info keys: recent_volatility, historical_volatility, ratio, triggered.
+        extinction_remaining_prop: prop used for this extinction event (None if no extinction).
         archive_size is the number of occupied cells (fits_np.size).
         """
+        _nan = float("nan")
+        dmin = dmin_trigger_info or {}
         row = {
             "generation": int(generation),
             "wall_time_s": float(np.float32(time.time() - self._start_time)),
             "archive_size": int(archive_size),
             "qd_score": float(np.float32(fitnesses.sum())),
-            "max_fitness": float(np.float32(fitnesses.max())) if fitnesses.size else float("nan"),
-            "mean_fitness": float(np.float32(fitnesses.mean())) if fitnesses.size else float("nan"),
+            "max_fitness": float(np.float32(fitnesses.max())) if fitnesses.size else _nan,
+            "mean_fitness": float(np.float32(fitnesses.mean())) if fitnesses.size else _nan,
             "mean_fitness_top_k": float(np.float32(mean_fitness_top_k)),
             "extinction_event": bool(is_extinction_gen),
             "trigger_recent_rate": float(np.float32(trigger_info["recent_rate"])),
             "trigger_historical_rate": float(np.float32(trigger_info["historical_rate"])),
             "trigger_ratio": float(np.float32(trigger_info["ratio"])),
             "trigger_fired": bool(trigger_info["triggered"]),
+            "d_min_recent_volatility": float(np.float32(dmin.get("recent_volatility", _nan))),
+            "d_min_historical_volatility": float(np.float32(dmin.get("historical_volatility", _nan))),
+            "d_min_volatility_ratio": float(np.float32(dmin.get("ratio", _nan))),
+            "d_min_trigger_fired": bool(dmin.get("triggered", False)),
+            "extinction_remaining_prop": (
+                float(np.float32(extinction_remaining_prop))
+                if extinction_remaining_prop is not None else _nan
+            ),
         }
         self._gen_rows.append(row)
         if len(self._gen_rows) % self.flush_every == 0:

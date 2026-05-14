@@ -38,12 +38,14 @@ CONDITION_ORDER = [
     "adaptive_alpha03",
     "encoder_post",
     "enc_random_rate",
+    "d_min_trigger",
+    "ramped_prop",
 ]
 
 CONDITION_LABELS: dict[str, str] = {
     "no_extinction":     "No Ext.",
     "static":            "Static",
-    "adaptive_default":  "Adaptive (default)",
+    "adaptive_default":  "Fitness Trigger (default)",
     "adaptive_topk10":   "top-k=10%",
     "adaptive_topk30":   "top-k=30%",
     "adaptive_patience5":  "patience=5",
@@ -52,6 +54,8 @@ CONDITION_LABELS: dict[str, str] = {
     "adaptive_alpha03":  "α=0.3",
     "encoder_post":      "Post-Encoder",
     "enc_random_rate":   "Enc. Rate (random)",
+    "d_min_trigger":     "d_min Volatility Trigger",
+    "ramped_prop":       "Static + Ramped Prop.",
 }
 
 # Metrics to plot: (csv_column, y-label, apply_offset_for_final)
