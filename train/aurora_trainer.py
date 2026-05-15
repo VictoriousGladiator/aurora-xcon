@@ -39,7 +39,7 @@ from utils import (
 )
 from viz.visualization import kheperax_viz_best_individual, viz_best_individual
 
-from logging_utils.metrics_logger import MetricsLogger
+from logging_utils.metrics_logger import MetricsLogger, latent_answer_set_metrics
 
 
 def _check_fitness_trigger(
@@ -389,12 +389,22 @@ def train(
                 * progress
             )
 
+        answer_set_metrics = None
+        if logger is not None and bool(getattr(cfg, "log_answer_set_geometry", True)):
+            Z = np.asarray(repertoire.descriptors[valid])
+            answer_set_metrics = latent_answer_set_metrics(Z, logger._rng)
+            if cfg.repertoire == "adaptive":
+                answer_set_metrics["repertoire_d_min"] = float(np.asarray(repertoire.d_min).item())
+            else:
+                answer_set_metrics["repertoire_d_min"] = float("nan")
+
         if logger is not None:
             logger.log_generation(
                 actual_gen, fits_np, is_ext, mean_topk, trigger_info,
                 archive_size=fits_np.size,
                 dmin_trigger_info=dmin_trigger_info,
                 extinction_remaining_prop=_remaining_prop if is_ext else None,
+                answer_set_metrics=answer_set_metrics,
             )
 
         # Apply extinction before encoder (all modes except encoder_post)
@@ -766,6 +776,7 @@ def main(cfg: DictConfig) -> None:
                 "adaptive_extinction": OmegaConf.to_container(cfg.adaptive_extinction),
                 "reward_type": str(cfg.env.reward_type),
                 "speed_bonus_factor": float(getattr(cfg.env, "speed_bonus_factor", 1.0)),
+                "log_answer_set_geometry": bool(getattr(cfg, "log_answer_set_geometry", True)),
             }),
             str(_run_dir / "config.yaml"),
         )

@@ -14,6 +14,8 @@ num_iterations: 2000
 num_total_steps: 2_000_000 # num_total_evals * episode_length
 
 metrics_log_period: 5
+# Log descriptor-space geometry (bbox / diameter / PCA volume + repertoire d_min) into metrics.csv
+log_answer_set_geometry: true
 me_repertoire: false
 
 # Emitter settings

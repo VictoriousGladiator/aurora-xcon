@@ -40,6 +40,54 @@ def cosine_drift(old_emb: np.ndarray, new_emb: np.ndarray) -> float:
     return float((1.0 - num / den).mean())
 
 
+def latent_answer_set_metrics(
+    Z: np.ndarray,
+    rng: np.random.Generator,
+    max_points: int = 400,
+) -> dict[str, float]:
+    """Geometry of occupied archive cells in descriptor (latent) space.
+
+    ``latent_bbox_volume`` is the product of axis-aligned spans. If any axis
+    collapses, the product is **0** (degenerate archive geometry).
+    """
+    nan = float("nan")
+    out: dict[str, float] = {
+        "latent_bbox_volume": nan,
+        "latent_space_diameter": nan,
+        "latent_pca_volume": nan,
+    }
+    if Z.ndim != 2 or Z.shape[0] < 2:
+        return out
+    Z = np.asarray(Z, dtype=np.float64)
+    Z = np.nan_to_num(Z, nan=0.0, posinf=0.0, neginf=0.0)
+    if not np.isfinite(Z).all():
+        return out
+
+    lo = Z.min(axis=0)
+    hi = Z.max(axis=0)
+    span = np.maximum(hi - lo, 1e-30)
+    out["latent_bbox_volume"] = float(np.prod(span))
+
+    n = Z.shape[0]
+    P = Z if n <= max_points else Z[rng.choice(n, size=max_points, replace=False)]
+    if P.shape[0] >= 2:
+        try:
+            from scipy.spatial.distance import pdist
+
+            out["latent_space_diameter"] = float(np.max(pdist(P, metric="euclidean")))
+        except Exception:
+            out["latent_space_diameter"] = nan
+
+    Zc = Z - Z.mean(axis=0, keepdims=True)
+    try:
+        _, s, _ = np.linalg.svd(Zc, full_matrices=False)
+        s = s[s > 1e-20]
+        out["latent_pca_volume"] = float(np.prod(s)) if s.size > 0 else 0.0
+    except np.linalg.LinAlgError:
+        out["latent_pca_volume"] = 0.0
+    return out
+
+
 # ---------- logger ----------
 
 @dataclass
@@ -84,6 +132,7 @@ class MetricsLogger:
         archive_size: int = 0,
         dmin_trigger_info: dict | None = None,
         extinction_remaining_prop: float | None = None,
+        answer_set_metrics: dict | None = None,
     ):
         """Log per-outer-iteration metrics.
 
@@ -93,9 +142,12 @@ class MetricsLogger:
         dmin_trigger_info keys: recent_volatility, historical_volatility, ratio, triggered.
         extinction_remaining_prop: prop used for this extinction event (None if no extinction).
         archive_size is the number of occupied cells (fits_np.size).
+        answer_set_metrics: optional keys from :func:`latent_answer_set_metrics` plus
+            ``repertoire_d_min`` when logged by the trainer.
         """
         _nan = float("nan")
         dmin = dmin_trigger_info or {}
+        asm = answer_set_metrics or {}
         row = {
             "generation": int(generation),
             "wall_time_s": float(np.float32(time.time() - self._start_time)),
@@ -117,6 +169,10 @@ class MetricsLogger:
                 float(np.float32(extinction_remaining_prop))
                 if extinction_remaining_prop is not None else _nan
             ),
+            "latent_bbox_volume": float(np.float32(asm.get("latent_bbox_volume", _nan))),
+            "latent_space_diameter": float(np.float32(asm.get("latent_space_diameter", _nan))),
+            "latent_pca_volume": float(np.float32(asm.get("latent_pca_volume", _nan))),
+            "repertoire_d_min": float(np.float32(asm.get("repertoire_d_min", _nan))),
         }
         self._gen_rows.append(row)
         if len(self._gen_rows) % self.flush_every == 0:

@@ -6,3 +6,8 @@ blob/
 output/
 wandb/
 teo_venv.txt
+.dockerignore
+build_container.sh
+docker-compose.cpu.yml
+docker-compose.yml
+Dockerfile
