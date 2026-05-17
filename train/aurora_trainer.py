@@ -39,7 +39,7 @@ from utils import (
 )
 from viz.visualization import kheperax_viz_best_individual, viz_best_individual
 
-from logging_utils.metrics_logger import MetricsLogger, latent_answer_set_metrics
+from logging_utils.metrics_logger import MetricsLogger, archive_coverage_metrics, latent_answer_set_metrics
 
 
 def _check_fitness_trigger(
@@ -392,7 +392,9 @@ def train(
         answer_set_metrics = None
         if logger is not None and bool(getattr(cfg, "log_answer_set_geometry", True)):
             Z = np.asarray(repertoire.descriptors[valid])
+            fits_full = np.asarray(repertoire.fitnesses)
             answer_set_metrics = latent_answer_set_metrics(Z, logger._rng)
+            answer_set_metrics.update(archive_coverage_metrics(fits_full, Z))
             if cfg.repertoire == "adaptive":
                 answer_set_metrics["repertoire_d_min"] = float(np.asarray(repertoire.d_min).item())
             else:
@@ -406,6 +408,10 @@ def train(
                 extinction_remaining_prop=_remaining_prop if is_ext else None,
                 answer_set_metrics=answer_set_metrics,
             )
+            if (bool(getattr(cfg, "save_archive_checkpoints", False))
+                    and actual_gen % int(getattr(cfg, "archive_checkpoint_interval", 100)) == 0):
+                _Z_ckpt = np.asarray(repertoire.descriptors[valid])
+                logger.save_archive_checkpoint(actual_gen, _Z_ckpt, fits_np)
 
         # Apply extinction before encoder (all modes except encoder_post)
         if is_ext and cfg.extinction_mode != "encoder_post":

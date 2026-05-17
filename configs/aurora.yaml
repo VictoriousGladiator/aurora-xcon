@@ -16,6 +16,9 @@ num_total_steps: 2_000_000 # num_total_evals * episode_length
 metrics_log_period: 5
 # Log descriptor-space geometry (bbox / diameter / PCA volume + repertoire d_min) into metrics.csv
 log_answer_set_geometry: true
+# Save per-generation archive descriptor snapshots for scatter-plot analysis
+save_archive_checkpoints: false
+archive_checkpoint_interval: 100
 me_repertoire: false
 
 # Emitter settings

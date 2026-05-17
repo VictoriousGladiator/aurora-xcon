@@ -40,6 +40,40 @@ def cosine_drift(old_emb: np.ndarray, new_emb: np.ndarray) -> float:
     return float((1.0 - num / den).mean())
 
 
+def archive_coverage_metrics(
+    fitnesses_full: np.ndarray,
+    descriptors_occupied: np.ndarray,
+) -> dict[str, float]:
+    """Coverage fraction and 2D-binned occupancy entropy of the archive.
+
+    fitnesses_full: raw fitness array for ALL cells (including -inf empty slots).
+    descriptors_occupied: descriptor array already filtered to occupied cells only.
+    Entropy is computed over a 20×20 histogram of the occupied descriptors
+    in their own range — encoder-rescaling invariant.
+    """
+    nan = float("nan")
+    fitnesses_full = np.asarray(fitnesses_full, dtype=np.float64)
+    occupied = np.isfinite(fitnesses_full) & (fitnesses_full > -1e38)
+    n_occupied = int(occupied.sum())
+    max_cells = len(fitnesses_full)
+    coverage = n_occupied / max_cells if max_cells > 0 else 0.0
+
+    entropy = nan
+    desc = np.asarray(descriptors_occupied, dtype=np.float64)
+    if n_occupied > 1 and desc.ndim == 2 and desc.shape[1] >= 2:
+        n_bins = 20
+        counts, _, _ = np.histogram2d(desc[:, 0], desc[:, 1], bins=n_bins)
+        probs = counts.flatten() / counts.sum()
+        probs = probs[probs > 0]
+        entropy = float(-np.sum(probs * np.log(probs)))
+
+    return {
+        "archive_n_occupied": n_occupied,
+        "archive_coverage": coverage,
+        "archive_occupancy_entropy": entropy,
+    }
+
+
 def latent_answer_set_metrics(
     Z: np.ndarray,
     rng: np.random.Generator,
@@ -173,6 +207,9 @@ class MetricsLogger:
             "latent_space_diameter": float(np.float32(asm.get("latent_space_diameter", _nan))),
             "latent_pca_volume": float(np.float32(asm.get("latent_pca_volume", _nan))),
             "repertoire_d_min": float(np.float32(asm.get("repertoire_d_min", _nan))),
+            "archive_n_occupied": int(asm.get("archive_n_occupied", 0)),
+            "archive_coverage": float(np.float32(asm.get("archive_coverage", _nan))),
+            "archive_occupancy_entropy": float(np.float32(asm.get("archive_occupancy_entropy", _nan))),
         }
         self._gen_rows.append(row)
         if len(self._gen_rows) % self.flush_every == 0:
@@ -214,6 +251,22 @@ class MetricsLogger:
             "effective_rank": eff_rank,
         }
         self._enc_rows.append(row)
+
+    def save_archive_checkpoint(
+        self,
+        generation: int,
+        descriptors: np.ndarray,
+        fitnesses: np.ndarray,
+    ) -> None:
+        """Save a compressed snapshot of occupied archive cells for scatter-plot analysis."""
+        ckpt_dir = self.run_dir / "checkpoints"
+        ckpt_dir.mkdir(exist_ok=True)
+        np.savez_compressed(
+            str(ckpt_dir / f"archive_gen_{generation:06d}.npz"),
+            descriptors=np.asarray(descriptors, dtype=np.float32),
+            fitnesses=np.asarray(fitnesses, dtype=np.float32),
+            generation=np.array(generation, dtype=np.int32),
+        )
 
     # ---------- IO ----------
 
