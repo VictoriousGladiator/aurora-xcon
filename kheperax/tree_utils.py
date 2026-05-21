@@ -2,7 +2,7 @@ import jax
 
 
 def get_batch_size(tree):
-    batch_size = jax.tree_leaves(tree)[0].shape[0]
+    batch_size = jax.tree_util.tree_leaves(tree)[0].shape[0]
     return batch_size
 
 

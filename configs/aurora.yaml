@@ -53,6 +53,7 @@ margin_auto_adjust: true
 extinction: false
 extinction_freq: 10
 remaining_prop: 0.05
+post_extinction_snapshot_offset: 5
 
 top_k_percent: 20
 extinction_mode: "off"   # "off" | "static" | "fitness_trigger" | "d_min_trigger" | "static_ramped_proportion"
