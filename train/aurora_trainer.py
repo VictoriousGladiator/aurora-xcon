@@ -16,6 +16,11 @@ import jax.numpy as jnp
 import wandb
 from omegaconf import DictConfig, OmegaConf
 
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+from utils import get_repertoire_fig
+
 from ae_utils.model_train import init_autoencoder_model_training
 from qdax.core.aurora_adaptive import AURORAAdaptivePassive
 from qdax.core.aurora_threshold import AURORAThresholdPassive
@@ -247,6 +252,14 @@ def sample_fixed_count(eligible, n, rng, ae_cfg, num_generations):
     raise ValueError(f"Could only place {len(chosen)}/{n} extinctions; relax cooldown or warmup")
 
 
+def save_latent_snapshot(repertoire, cfg, path: str, title: str):
+    fig, _ = get_repertoire_fig(repertoire, cfg, repertoire_name="repertoire")
+    if fig is not None:
+        fig.suptitle(title, fontsize=14)
+        fig.savefig(path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+  
+
 def train(
     cfg: DictConfig,
     aurora_scan_update,
@@ -283,6 +296,7 @@ def train(
         maxlen=5 * cfg.adaptive_extinction.patience + 1
     )
     _last_extinction_iter: int = 0
+    _actual_extinction_iters: list = []
 
     _dmin_history = collections.deque(
         maxlen=cfg.adaptive_extinction.d_min_window
@@ -460,11 +474,24 @@ def train(
         # Apply extinction before encoder (all modes except encoder_post)
         if is_ext and (cfg.extinction_mode != "encoder_post" or cfg.extinction_mode != "encoder_pre"):
             logging.info("Extinction event...")
+            if logger is not None:
+                plots_dir = logger.run_dir / "plots"
+                plots_dir.mkdir(parents=True, exist_ok=True)
+                before_path = plots_dir / f"latent_generation_{actual_gen}_before_ext.png"
+                logging.info(f"Saving snapshot to {before_path}")
+                save_latent_snapshot(repertoire, cfg, str(before_path), title=f"Latent Space - Gen {actual_gen} (Before Extinction)")
+
             random_key, subkey = jax.random.split(random_key)
             repertoire = repertoire.extinction(
                 remaining_prop=_remaining_prop, random_key=subkey
             )
             _last_extinction_iter = i
+            _actual_extinction_iters.append(i)
+
+            if logger is not None:
+                after_path = plots_dir / f"latent_generation_{actual_gen}_after_ext.png"
+                logging.info(f"Saving snapshot to {after_path}")
+                save_latent_snapshot(repertoire, cfg, str(after_path), title=f"Latent Space - Gen {actual_gen} (After Extinction)")
 
         # AE
         if (i + 1) in schedules and not cfg.no_training:
@@ -485,11 +512,24 @@ def train(
             # encoder_post: apply extinction after encoder retraining
             if is_ext and cfg.extinction_mode == "encoder_post":
                 logging.info("Extinction event (post-encoder)...")
+                if logger is not None:
+                    plots_dir = logger.run_dir / "plots"
+                    plots_dir.mkdir(parents=True, exist_ok=True)
+                    before_path = plots_dir / f"latent_generation_{actual_gen}_before_ext.png"
+                    logging.info(f"Saving snapshot to {before_path}")
+                    save_latent_snapshot(repertoire, cfg, str(before_path), title=f"Latent Space - Gen {actual_gen} (Before Extinction)")
+
                 random_key, subkey = jax.random.split(random_key)
                 repertoire = repertoire.extinction(
                     remaining_prop=_remaining_prop, random_key=subkey
                 )
                 _last_extinction_iter = i
+                _actual_extinction_iters.append(i)
+
+                if logger is not None:
+                    after_path = plots_dir / f"latent_generation_{actual_gen}_after_ext.png"
+                    logging.info(f"Saving snapshot to {after_path}")
+                    save_latent_snapshot(repertoire, cfg, str(after_path), title=f"Latent Space - Gen {actual_gen} (After Extinction)")
             metrics_last_iter = jax.tree_util.tree_map(
                 lambda metric: "{0:.4f}".format(float(metric[-1])), model_metrics
             )
@@ -603,6 +643,21 @@ def train(
                 **logged_metrics,
                 **{key: jnp.mean(value) for key, value in model_metrics.items()},
             }
+
+        offset = getattr(cfg, "post_extinction_snapshot_offset", 5)
+        if logger is not None and any(i == ext_i + offset for ext_i in _actual_extinction_iters):
+            plots_dir = logger.run_dir / "plots"
+            plots_dir.mkdir(parents=True, exist_ok=True)
+            matching_ext_i = next(ext_i for ext_i in _actual_extinction_iters if i == ext_i + offset)
+            ext_gen = (matching_ext_i + 1) * cfg.metrics_log_period
+            post_path = plots_dir / f"latent_generation_{actual_gen}_{offset}_gens_after_ext_gen{ext_gen}.png"
+            logging.info(f"Saving snapshot to {post_path}")
+            save_latent_snapshot(
+                repertoire, 
+                cfg, 
+                str(post_path), 
+                title=f"Latent Space - Gen {actual_gen} ({offset} Gens After Gen {ext_gen} Extinction)"
+            )
 
         logged_metrics, all_metrics = log_running_metrics(
             metrics, logged_metrics, all_metrics, step=total_evaluations
@@ -859,6 +914,18 @@ def main(cfg: DictConfig) -> None:
         _run_dir = Path("runs") / f"{_ts}_{cfg.env.name}_seed{cfg.seed}"
         logger = MetricsLogger(run_dir=_run_dir, seed=cfg.seed)
         logger.set_drift_sample(repertoire, aurora_extra_info, aurora._encoder_fn)
+
+        # Save initialization snapshot
+        plots_dir = _run_dir / "plots"
+        plots_dir.mkdir(parents=True, exist_ok=True)
+        logging.info("Saving initialization snapshot")
+        save_latent_snapshot(
+            repertoire, 
+            cfg, 
+            str(plots_dir / "latent_init.png"), 
+            title="Latent Space - Initialization (Gen 0)"
+        )
+
         OmegaConf.save(
             OmegaConf.create({
                 "env": cfg.env.name,

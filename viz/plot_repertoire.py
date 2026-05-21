@@ -84,36 +84,86 @@ def plot_repertoire_embeddings(
     vmin: Optional[float] = None,
     vmax: Optional[float] = None,
 ) -> Tuple[Optional[Figure], Axes]:
-    my_cmap = "viridis"
+    grid_empty = (repertoire_fitnesses == -jnp.inf)
+    
+    if jnp.all(grid_empty):
+        fig, axs = plt.subplots(1, 2, figsize=(12, 5.5))
+        axs[0].set_title("AURORA Rep. (t-SNE) [Empty]", fontsize=12, fontweight='bold', pad=10)
+        axs[1].set_title("Corresponding Passive Descriptors [Empty]", fontsize=12, fontweight='bold', pad=10)
+        return fig, axs
 
-    # Plot the embeddings
-    fig, axs = plt.subplots(1, 2, figsize=(10, 5))
+    active_fitnesses = repertoire_fitnesses[~grid_empty]
+    active_embeddings = embeddings_2d[~grid_empty]
+    active_descriptors = repertoire_descriptors[~grid_empty]
+
+    if vmin is None:
+        vmin = float(jnp.min(active_fitnesses))
+    if vmax is None:
+        vmax = float(jnp.max(active_fitnesses))
+    if vmin == vmax:
+        vmax += 1.0
+
+    my_cmap = "plasma" 
+
+    fig, axs = plt.subplots(1, 2, figsize=(12.5, 5.5), facecolor='white')
+    
+    
+    for i, a in enumerate(axs):
+        a.set_facecolor("#fcfcfc")
+        a.grid(True, which='both', linestyle='--', linewidth=0.5, color='#e0e0e0', alpha=0.7, zorder=0)
+        a.set_axisbelow(True)
+        for spine in ["top", "right"]:
+            a.spines[spine].set_visible(False)
+        for spine in ["left", "bottom"]:
+            a.spines[spine].set_color("#cccccc")
+            a.spines[spine].set_linewidth(0.8)
+
+    axs[0].set_title("AURORA Encoder Latent Space (t-SNE)", fontsize=12, fontweight='bold', pad=12, color="#333333")
+    axs[0].set_xlabel("t-SNE Dimension 1", fontsize=10, labelpad=8, color="#555555")
+    axs[0].set_ylabel("t-SNE Dimension 2", fontsize=10, labelpad=8, color="#555555")
+    
+    norm = Normalize(vmin=vmin, vmax=vmax)
+    
+    axs[0].scatter(
+        active_embeddings[:, 0],
+        active_embeddings[:, 1],
+        c=active_fitnesses,
+        cmap=my_cmap,
+        norm=norm,
+        alpha=0.85,
+        s=18,
+        edgecolors='none',
+        zorder=3
+    )
+
     axs[1].set_xlim(minval, maxval)
     axs[1].set_ylim(minval, maxval)
-    axs[0].set_title("AURORA rep. (TSNE plot)")
-    axs[1].set_title("Corresponding passive descriptors")
+    axs[1].set_title("Corresponding Passive Descriptors", fontsize=12, fontweight='bold', pad=12, color="#333333")
+    axs[1].set_xlabel("Descriptor Dimension 1", fontsize=10, labelpad=8, color="#555555")
+    axs[1].set_ylabel("Descriptor Dimension 2", fontsize=10, labelpad=8, color="#555555")
 
-    norm = Normalize(vmin=vmin, vmax=vmax)
-    # colours = jnp.arctan2(embeddings_2d[:, 1], embeddings_2d[:, 0])
-    colours = norm(repertoire_fitnesses)
-    axs[0].scatter(
-        embeddings_2d[:, 0],
-        embeddings_2d[:, 1],
-        c=colours,
-        cmap=my_cmap,
-        alpha=0.7,
-        s=10,
-    )
-
-    # Plot the passive repertoire as a scatter plot with same color scheme
-    descriptors = repertoire_descriptors
     axs[1].scatter(
-        descriptors[:, 0],
-        descriptors[:, 1],
-        c=colours,
+        active_descriptors[:, 0],
+        active_descriptors[:, 1],
+        c=active_fitnesses,
         cmap=my_cmap,
-        alpha=0.7,
-        s=10,
+        norm=norm,
+        alpha=0.85,
+        s=18,
+        edgecolors='none',
+        zorder=3
     )
-    plt.colorbar(mpl.cm.ScalarMappable(norm=norm, cmap=my_cmap), ax=axs)
+
+    cbar = fig.colorbar(
+        mpl.cm.ScalarMappable(norm=norm, cmap=my_cmap), 
+        ax=axs, 
+        orientation="vertical", 
+        fraction=0.03, 
+        pad=0.04
+    )
+    cbar.set_label("Fitness Value", fontsize=11, labelpad=10, fontweight='semibold', color="#333333")
+    cbar.ax.tick_params(labelsize=9, color="#555555")
+    cbar.outline.set_visible(False)
+    
+    fig.subplots_adjust(wspace=0.25)
     return fig, axs
