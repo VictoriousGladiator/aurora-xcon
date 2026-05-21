@@ -122,9 +122,9 @@ def _check_hybrid_trigger(
         )
 
     Triggers when:
-      1. d_min stagnates AND fitness stagnates
+      1. d_min stagnates AND fitness stagnates (after post-extinction re-arm)
       OR
-      2. d_min remains very high for too long
+      2. d_min is inf/nan (immediate), or stays above threshold for high_d_min_patience
     """
     nan = float("nan")
 
@@ -144,11 +144,21 @@ def _check_hybrid_trigger(
 
     # d_min stagnation
     d_hist = list(dmin_history)
+    current_dmin = float(d_hist[-1])
+    finite_d = [float(x) for x in d_hist if math.isfinite(float(x))]
+    dmin_range = (
+        max(finite_d) - min(finite_d) if finite_d else float("nan")
+    )
 
-    dmin_range = max(d_hist) - min(d_hist)
+    rearmed = state.get("dmin_rearmed", True)
+    if not rearmed and math.isfinite(dmin_range):
+        if dmin_range > ae_cfg.d_min_stagnation_threshold:
+            rearmed = True
+            state["dmin_rearmed"] = True
 
     dmin_stagnating = (
-        dmin_range < ae_cfg.d_min_stagnation_threshold
+        math.isfinite(dmin_range)
+        and dmin_range < ae_cfg.d_min_stagnation_threshold
     )
 
     # Fitness stagnation
@@ -167,40 +177,40 @@ def _check_hybrid_trigger(
         < ae_cfg.fitness_improvement_threshold
     )
 
-    # Accumulate patience counters
-    state["dmin_stagnant_count"] = (
-        state["dmin_stagnant_count"] + 1
-        if dmin_stagnating
-        else 0
-    )
+    # Accumulate patience counters (only after post-extinction re-arm)
+    if rearmed:
+        state["dmin_stagnant_count"] = (
+            state["dmin_stagnant_count"] + 1
+            if dmin_stagnating
+            else 0
+        )
 
-    state["fitness_stagnant_count"] = (
-        state["fitness_stagnant_count"] + 1
-        if fitness_stagnating
-        else 0
-    )
+        state["fitness_stagnant_count"] = (
+            state["fitness_stagnant_count"] + 1
+            if fitness_stagnating
+            else 0
+        )
+    else:
+        state["dmin_stagnant_count"] = 0
+        state["fitness_stagnant_count"] = 0
 
-    # Emergency high-d_min trigger
-    current_dmin = d_hist[-1]
-
-    state["high_dmin_count"] = (
-        state["high_dmin_count"] + 1
-        if current_dmin > ae_cfg.high_d_min_threshold
-        else 0
-    )
-
-    emergency_trigger = (
-        state["high_dmin_count"]
-        >= ae_cfg.high_d_min_patience
-    )
+    # Emergency: inf/nan d_min fires immediately; high d_min uses patience
+    if not math.isfinite(current_dmin):
+        emergency_trigger = True
+    elif rearmed and current_dmin > ae_cfg.high_d_min_threshold:
+        state["high_dmin_count"] = state["high_dmin_count"] + 1
+        emergency_trigger = (
+            state["high_dmin_count"] >= ae_cfg.high_d_min_patience
+        )
+    else:
+        state["high_dmin_count"] = 0
+        emergency_trigger = False
 
     # Main trigger
     hybrid_trigger = (
-        state["dmin_stagnant_count"]
-        >= ae_cfg.d_min_patience
-        and
-        state["fitness_stagnant_count"]
-        >= ae_cfg.fitness_patience
+        rearmed
+        and state["dmin_stagnant_count"] >= ae_cfg.d_min_patience
+        and state["fitness_stagnant_count"] >= ae_cfg.fitness_patience
     )
 
     triggered = emergency_trigger or hybrid_trigger
@@ -210,6 +220,7 @@ def _check_hybrid_trigger(
         state["dmin_stagnant_count"] = 0
         state["fitness_stagnant_count"] = 0
         state["high_dmin_count"] = 0
+        state["dmin_rearmed"] = False
 
     return (
         triggered,
@@ -267,6 +278,7 @@ def train(
         "dmin_stagnant_count": 0,
         "fitness_stagnant_count": 0,
         "high_dmin_count": 0,
+        "dmin_rearmed": True,
     }
 
     for i in range(num_generations):

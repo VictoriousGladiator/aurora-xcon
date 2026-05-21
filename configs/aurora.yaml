@@ -64,19 +64,19 @@ adaptive_extinction:
   cooldown: 10  # outer iterations after an extinction before re-trigger
 
   # d_min volatility trigger params
-  d_min_patience: 10   # recent window (outer iterations)
+  d_min_patience: 5    # consecutive stagnant outer iterations (hybrid branch)
   d_min_alpha: 0.2     # recent_vol / historical_vol threshold
-  d_min_warmup: 50     # outer iterations before eligible
-  d_min_cooldown: 10   # outer iterations after an extinction before re-trigger
+  d_min_warmup: 25     # outer iterations before eligible
+  d_min_cooldown: 5    # outer iterations after an extinction before re-trigger
 
   # hybrid d_min_trigger (stagnation + top-k fitness + emergency high d_min)
-  d_min_window: 15
-  fitness_window: 15
-  d_min_stagnation_threshold: 0.01
-  fitness_improvement_threshold: 0.02
-  high_d_min_threshold: 0.95
-  high_d_min_patience: 30
-  fitness_patience: 10
+  d_min_window: 10
+  fitness_window: 10
+  d_min_stagnation_threshold: 0.03
+  fitness_improvement_threshold: 0.05
+  high_d_min_threshold: 0.75
+  high_d_min_patience: 12
+  fitness_patience: 5
 
   # ramped proportion params (used by static_ramped_proportion mode)
   ramped_prop_min: 0.05

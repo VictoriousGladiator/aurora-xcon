@@ -39,6 +39,7 @@ BASE_CMD = [
     "env=kheperax",
     "loss_type=triplet",
     "extinction_mode=fitness_trigger",
+    "wandb.mode=offline",
     "hydra.verbose=false",
 ]
 
