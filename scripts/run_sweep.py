@@ -85,8 +85,14 @@ NEW_TRIGGER_CONDITIONS = [
             "adaptive_extinction.ramped_prop_max": 0.40}),
 ]
 
+COUNT_CONTROL_CONDITIONS = [
+    dict(extinction_mode="random_fixed_count", target_extinction_count=n, top_k_percent=20)
+    for n in (11, 12, 13, 14, 17)
+]
+
+
 SEEDS = [20, 42, 7, 13, 99]
-EXPERIMENTS = [dict(seed=s, **c) for c in CONDITIONS for s in SEEDS]
+EXPERIMENTS = [dict(seed=s, **c) for c in COUNT_CONTROL_CONDITIONS for s in SEEDS]
 
 # ---------------------------------------------------------------------------
 # Defaults matching aurora.yaml
@@ -143,6 +149,9 @@ def _experiment_key(exp: dict, reward_type: str) -> str:
         cond = "d_min_trigger"
     elif mode == "static_ramped_proportion":
         cond = f"ramped_prop_f{exp.get('extinction_freq', 10)}"
+    elif mode == "random_fixed_count":
+        cond = f"random_ext_{exp.get('target_extinction_count', 13)}"
+        
     else:
         if topk != 20:
             cond = f"topk{topk}"
@@ -374,7 +383,7 @@ def _parse_args() -> tuple[bool, bool, bool, int, str, float, str]:
     if reward_type not in _REWARD_TYPES:
         print(f"ERROR: unknown --reward '{reward_type}'. Choose from: {_REWARD_TYPES}")
         sys.exit(1)
-    if subset not in ("main", "encoder", "new_triggers"):
+    if subset not in ("main", "encoder", "new_triggers", "count_control"):
         print(f"ERROR: unknown --subset '{subset}'. Choose from: main, encoder, new_triggers")
         sys.exit(1)
     return dry_run, check, verbose, workers, reward_type, speed_bonus_factor, subset
@@ -391,6 +400,8 @@ def main() -> None:
         conditions = ENCODER_CONDITIONS
     elif subset == "new_triggers":
         conditions = NEW_TRIGGER_CONDITIONS
+    elif subset == "count_control":
+        conditions = COUNT_CONTROL_CONDITIONS
     else:
         conditions = CONDITIONS
     experiments = [dict(seed=s, **c) for c in conditions for s in SEEDS]

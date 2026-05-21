@@ -136,6 +136,9 @@ def condition_label(cfg: dict) -> str:
         return "d_min_trigger"
     if mode == "static_ramped_proportion":
         return "ramped_prop"
+    
+    if mode == "random_fixed_count":
+        return f"random_ext_{cfg.get('target_extinction_count', '?')}"
 
     # fitness_trigger (and legacy "adaptive") — distinguish by topk/patience/alpha
     topk = int(cfg["top_k_percent"])

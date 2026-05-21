@@ -228,6 +228,18 @@ def _check_hybrid_trigger(
         rel_improvement,
     )
 
+def sample_fixed_count(eligible, n, rng):
+    pool = rng.permutation(eligible)
+    chosen = []
+    last = -10**9
+    for it in pool:
+        chosen.append(int(it))
+        last = int(it)
+        if len(chosen) == n:
+            return frozenset(chosen)
+    raise ValueError(f"Could only place {len(chosen)}/{n} extinctions; relax cooldown or warmup")
+
+
 
 def train(
     cfg: DictConfig,
@@ -272,6 +284,12 @@ def train(
 
     _fitness_history = collections.deque(
         maxlen=cfg.adaptive_extinction.fitness_window
+    )
+
+    rng = np.random.default_rng(cfg.seed + 99991)
+    eligible = np.arange(0, num_generations - 1)
+    _extinction_schedule = sample_fixed_count(
+        eligible, n=cfg.target_extinction_count, rng=rng
     )
 
     _trigger_state = {
@@ -389,6 +407,10 @@ def train(
                 # Stochastic trigger with same expected frequency as encoder training.
                 random_key, subkey = jax.random.split(random_key)
                 is_ext = bool(jax.random.bernoulli(subkey, p=_p_random_ext))
+            
+            elif cfg.extinction_mode == "random_fixed_count":
+                is_ext = i in _extinction_schedule
+
 
         # Compute remaining_prop for this potential extinction event.
         # static_ramped_proportion ramps from prop_min to prop_max over training.
@@ -789,6 +811,7 @@ def main(cfg: DictConfig) -> None:
                 "reward_type": str(cfg.env.reward_type),
                 "speed_bonus_factor": float(getattr(cfg.env, "speed_bonus_factor", 1.0)),
                 "log_answer_set_geometry": bool(getattr(cfg, "log_answer_set_geometry", True)),
+                "target_extinction_count": int(cfg.target_extinction_count),
             }),
             str(_run_dir / "config.yaml"),
         )

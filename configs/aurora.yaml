@@ -57,6 +57,8 @@ remaining_prop: 0.05
 top_k_percent: 20
 extinction_mode: "off"   # "off" | "static" | "fitness_trigger" | "d_min_trigger" | "static_ramped_proportion"
 
+target_extinction_count: 13
+
 adaptive_extinction:
   warmup: 50    # outer iterations before trigger is eligible
   patience: 10  # recent window size (outer iterations)
