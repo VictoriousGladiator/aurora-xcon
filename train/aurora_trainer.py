@@ -403,6 +403,9 @@ def train(
             elif cfg.extinction_mode == "encoder_post":
                 # Logged as extinction on this iteration; applied after encoder retrains below.
                 is_ext = bool((i + 1) in schedules) and not cfg.no_training
+            elif cfg.extinction_mode == "encoder_pre":
+                # Logged as extinction on this iteration; applied after encoder retrains below.
+                is_ext = bool((i - 1) in schedules) and not cfg.no_training
             elif cfg.extinction_mode == "random_encoder_rate":
                 # Stochastic trigger with same expected frequency as encoder training.
                 random_key, subkey = jax.random.split(random_key)
@@ -449,6 +452,14 @@ def train(
                 remaining_prop=_remaining_prop, random_key=subkey
             )
             _last_extinction_iter = i
+        
+        if is_ext and cfg.extinction_mode != "encoder_pre":
+            logging.info("Extinction event...")
+            random_key, subkey = jax.random.split(random_key)
+            repertoire = repertoire.extinction(
+                remaining_prop=_remaining_prop, random_key=subkey
+            )
+            _last_extinction_iter = i
 
         # AE
         if (i + 1) in schedules and not cfg.no_training:
@@ -477,6 +488,18 @@ def train(
             metrics_last_iter = jax.tree_util.tree_map(
                 lambda metric: "{0:.4f}".format(float(metric[-1])), model_metrics
             )
+
+            if is_ext and cfg.extinction_mode == "encoder_pre":
+                logging.info("Extinction event (pre-encoder)...")
+                random_key, subkey = jax.random.split(random_key)
+                repertoire = repertoire.extinction(
+                    remaining_prop=_remaining_prop, random_key=subkey
+                )
+                _last_extinction_iter = i
+            metrics_last_iter = jax.tree_util.tree_map(
+                lambda metric: "{0:.4f}".format(float(metric[-1])), model_metrics
+            )
+
             logging.info(metrics_last_iter)
             if logger is not None:
                 _valid = repertoire.fitnesses != -jnp.inf

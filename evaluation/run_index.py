@@ -130,6 +130,8 @@ def condition_label(cfg: dict) -> str:
         return "static"
     if mode == "encoder_post":
         return "encoder_post"
+    if mode == "encoder_pre":
+        return "encoder_pre"
     if mode == "random_encoder_rate":
         return "enc_random_rate"
     if mode == "d_min_trigger":

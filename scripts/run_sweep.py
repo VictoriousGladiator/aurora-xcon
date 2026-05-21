@@ -88,8 +88,9 @@ NEW_TRIGGER_CONDITIONS = [
 COUNT_CONTROL_CONDITIONS = [
     dict(extinction_mode="random_fixed_count", target_extinction_count=n, top_k_percent=20)
     for n in (11, 12, 13, 14, 17)
+] + [
+    dict(top_k_percent=20, extinction_mode="encoder_pre"),
 ]
-
 
 SEEDS = [20, 42, 7, 13, 99]
 EXPERIMENTS = [dict(seed=s, **c) for c in COUNT_CONTROL_CONDITIONS for s in SEEDS]
@@ -143,6 +144,8 @@ def _experiment_key(exp: dict, reward_type: str) -> str:
         cond = f"static_f{exp.get('extinction_freq', 10)}"
     elif mode == "encoder_post":
         cond = "encoder_post"
+    elif mode == "encoder_pre":
+        cond = "encoder_pre"
     elif mode == "random_encoder_rate":
         cond = "enc_random_rate"
     elif mode == "d_min_trigger":
