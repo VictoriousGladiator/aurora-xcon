@@ -86,10 +86,11 @@ NEW_TRIGGER_CONDITIONS = [
 ]
 
 COUNT_CONTROL_CONDITIONS = [
-    dict(extinction_mode="random_fixed_count", target_extinction_count=n, top_k_percent=20)
-    for n in (11, 12, 13, 14, 17)
-] + [
+    dict(extinction_mode="random_fixed_count", target_extinction_count=12, top_k_percent=20),
+    dict(extinction_mode="random_fixed_count", target_extinction_count=15, top_k_percent=20),
     dict(top_k_percent=20, extinction_mode="encoder_pre"),
+    dict(top_k_percent=20, extinction_mode="static", extinction_freq=133, remaining_prop=0.05),
+    dict(top_k_percent=20, extinction_mode="static", extinction_freq=167, remaining_prop=0.05),
 ]
 
 SEEDS = [20, 42, 7, 13, 99]

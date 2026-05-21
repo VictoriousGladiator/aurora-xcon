@@ -228,7 +228,7 @@ def _check_hybrid_trigger(
         rel_improvement,
     )
 
-def sample_fixed_count(eligible, n, rng):
+def sample_fixed_count(eligible, n, rng, ae_cfg, num_generations):
     pool = rng.permutation(eligible)
     chosen = []
     last = -10**9
@@ -236,9 +236,16 @@ def sample_fixed_count(eligible, n, rng):
         chosen.append(int(it))
         last = int(it)
         if len(chosen) == n:
+            chosen = sorted(chosen)
+            for i in range(1, len(chosen)):
+                if chosen[i] - chosen[i - 1] < ae_cfg.adaptive_extinction.cooldown:
+                    if chosen[i] + ae_cfg.adaptive_extinction.cooldown > num_generations - 1:
+                        chosen[i] = num_generations - 1
+                    else:
+                        chosen[i] = chosen[i] + ae_cfg.adaptive_extinction.cooldown
+            raise ValueError(f'chosen: {chosen}, cooldown: {ae_cfg.adaptive_extinction.cooldown}, num_generations: {num_generations}')
             return frozenset(chosen)
     raise ValueError(f"Could only place {len(chosen)}/{n} extinctions; relax cooldown or warmup")
-
 
 
 def train(
@@ -288,8 +295,9 @@ def train(
 
     rng = np.random.default_rng(cfg.seed + 99991)
     eligible = np.arange(0, num_generations - 1)
+    
     _extinction_schedule = sample_fixed_count(
-        eligible, n=cfg.target_extinction_count, rng=rng
+        eligible, n=cfg.target_extinction_count, rng=rng, ae_cfg=cfg, num_generations=num_generations
     )
 
     _trigger_state = {
@@ -363,7 +371,7 @@ def train(
         is_ext = False
         if i != num_generations - 1:
             if cfg.extinction_mode == "static":
-                is_ext = (i + 1) % cfg.extinction_freq == 0
+                is_ext = (i + 1) % cfg.extinction_freq == 0 
             elif cfg.extinction_mode == "fitness_trigger":
                 fired, rr, hr, ratio = _check_fitness_trigger(
                     _top_k_history, _last_extinction_iter, i, cfg.adaptive_extinction
