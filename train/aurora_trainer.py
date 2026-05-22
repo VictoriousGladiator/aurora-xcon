@@ -472,7 +472,7 @@ def train(
                 logger.save_archive_checkpoint(actual_gen, _Z_ckpt, fits_np)
 
         # Apply extinction before encoder (all modes except encoder_post)
-        if is_ext and (cfg.extinction_mode != "encoder_post" or cfg.extinction_mode != "encoder_pre"):
+        if is_ext and cfg.extinction_mode not in ("encoder_post", "encoder_pre"):
             logging.info("Extinction event...")
             if logger is not None:
                 plots_dir = logger.run_dir / "plots"
@@ -566,11 +566,24 @@ def train(
             # encoder_post: apply extinction after encoder retraining
             if is_ext and cfg.extinction_mode == "encoder_pre":
                 logging.info("Extinction event (pre-encoder)...")
+                if logger is not None:
+                    plots_dir = logger.run_dir / "plots"
+                    plots_dir.mkdir(parents=True, exist_ok=True)
+                    before_path = plots_dir / f"latent_generation_{actual_gen}_before_ext.png"
+                    logging.info(f"Saving snapshot to {before_path}")
+                    save_latent_snapshot(repertoire, cfg, str(before_path), title=f"Latent Space - Gen {actual_gen} (Before Extinction)")
+
                 random_key, subkey = jax.random.split(random_key)
                 repertoire = repertoire.extinction(
                     remaining_prop=_remaining_prop, random_key=subkey
                 )
                 _last_extinction_iter = i
+                _actual_extinction_iters.append(i)
+
+                if logger is not None:
+                    after_path = plots_dir / f"latent_generation_{actual_gen}_after_ext.png"
+                    logging.info(f"Saving snapshot to {after_path}")
+                    save_latent_snapshot(repertoire, cfg, str(after_path), title=f"Latent Space - Gen {actual_gen} (After Extinction)")
             metrics_last_iter = jax.tree_util.tree_map(
                 lambda metric: "{0:.4f}".format(float(metric[-1])), model_metrics
             )
