@@ -13,7 +13,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from evaluation.run_index import scan_runs, condition_label
+from evaluation.run_index import scan_runs, condition_label, SUBSET_LABELS
 
 _PROJECT_ROOT = Path(__file__).parent.parent
 _EVAL_DIR = Path(__file__).parent
@@ -82,28 +82,52 @@ def compute_run_metrics(run_dir: Path, reward_type: str = "final") -> dict:
 
 def main() -> None:
     reward_type = "final"
+    subset: str | None = None
     args = sys.argv[1:]
-    for i, a in enumerate(args):
+    i = 0
+    while i < len(args):
+        a = args[i]
         if a == "--reward" and i + 1 < len(args):
-            reward_type = args[i + 1]
+            reward_type = args[i + 1]; i += 2
         elif a.startswith("--reward="):
-            reward_type = a.split("=", 1)[1]
+            reward_type = a.split("=", 1)[1]; i += 1
+        elif a == "--subset" and i + 1 < len(args):
+            subset = args[i + 1]; i += 2
+        elif a.startswith("--subset="):
+            subset = a.split("=", 1)[1]; i += 1
+        else:
+            i += 1
 
-    output_csv = _EVAL_DIR / f"metrics_summary_{reward_type}.csv"
+    if subset is not None and subset not in SUBSET_LABELS:
+        print(f"ERROR: unknown --subset '{subset}'. Choose from: {sorted(SUBSET_LABELS)}")
+        sys.exit(1)
+
+    allowed_labels: set[str] | None = set(SUBSET_LABELS[subset]) if subset else None
+
+    # Include subset in output filename so different experiment CSVs don't overwrite each other.
+    csv_tag = f"_{subset}" if subset else ""
+    output_csv = _EVAL_DIR / f"metrics_summary_{reward_type}{csv_tag}.csv"
 
     runs = scan_runs(_PROJECT_ROOT)
     complete = [r for r in runs if r["is_complete"] and r.get("reward_type", "final") == reward_type]
     total_complete = sum(1 for r in runs if r["is_complete"])
-    print(f"Found {len(complete)} complete {reward_type} run(s) (out of {total_complete} total complete).\n")
+    print(f"Found {len(complete)} complete {reward_type} run(s) (out of {total_complete} total complete).")
+    if subset:
+        print(f"Filtering to subset '{subset}': {SUBSET_LABELS[subset]}")
+    print()
 
     if not complete:
         print(f"No complete runs with reward_type='{reward_type}' found.")
         return
 
     rows = []
+    skipped = 0
     for run_info in complete:
-        metrics = compute_run_metrics(run_info["run_dir"], reward_type)
         label = condition_label(run_info)
+        if allowed_labels is not None and label not in allowed_labels:
+            skipped += 1
+            continue
+        metrics = compute_run_metrics(run_info["run_dir"], reward_type)
         rows.append({
             "condition_label": label,
             "seed": run_info["seed"],
@@ -121,6 +145,8 @@ def main() -> None:
         "final_qd_score", "best_fitness_reached", "auc_qd_score",
         "extinction_count", "mean_extinction_interval", "gen_best_fitness",
     ])
+    if skipped:
+        print(f"  (skipped {skipped} run(s) outside subset '{subset}')")
     _EVAL_DIR.mkdir(parents=True, exist_ok=True)
     summary.to_csv(output_csv, index=False)
     print(f"\nSaved {len(summary)} rows to {output_csv}")

@@ -6,6 +6,7 @@ Public API:
     scan_runs(project_root)  -> list[dict]
     condition_label(cfg)     -> str
     params_match(exp, cfg)   -> bool
+    SUBSET_LABELS            -> dict mapping subset name -> ordered list of labels
 """
 from __future__ import annotations
 from pathlib import Path
@@ -143,21 +144,21 @@ def condition_label(cfg: dict) -> str:
         count = cfg.get("target_extinction_count", "?")
         return f"random_fixed_count_{count}"
 
-    # fitness_trigger (and legacy "adaptive") — distinguish by topk/patience/alpha
+    # fitness_trigger — distinguish by topk/patience/alpha
     topk = int(cfg["top_k_percent"])
     patience = int(cfg["patience"])
     alpha = float(cfg["alpha"])
 
     if topk == _DEFAULT_TOPK and patience == _DEFAULT_PATIENCE and abs(alpha - _DEFAULT_ALPHA) < 1e-5:
-        return "adaptive_default"
+        return "fitness_trigger_default"
 
     if topk != _DEFAULT_TOPK:
-        return f"adaptive_topk{topk}"
+        return f"fitness_trigger_topk{topk}"
     if patience != _DEFAULT_PATIENCE:
-        return f"adaptive_patience{patience}"
+        return f"fitness_trigger_patience{patience}"
     # Encode alpha: strip decimal point ("0.1" -> "01", "0.3" -> "03")
     alpha_str = f"{alpha:.1f}".replace(".", "")
-    return f"adaptive_alpha{alpha_str}"
+    return f"fitness_trigger_alpha{alpha_str}"
 
 
 def params_match(exp_dict: dict, run_cfg: dict) -> bool:
@@ -181,3 +182,31 @@ def params_match(exp_dict: dict, run_cfg: dict) -> bool:
             if str(run_val) != str(exp_val):
                 return False
     return True
+
+
+# ---------------------------------------------------------------------------
+# SUBSET_LABELS — loaded dynamically from scripts/run_sweep.py so it always
+# reflects the current condition lists without manual syncing.
+# run_sweep.py computes SUBSET_LABELS from the actual condition dicts using
+# _cond_label(), which mirrors condition_label() for completed runs.
+# ---------------------------------------------------------------------------
+
+def _load_subset_labels() -> "dict[str, list[str]]":
+    """Load SUBSET_LABELS from scripts/run_sweep.py via importlib (no circular import)."""
+    import importlib.util
+    from pathlib import Path
+    _path = Path(__file__).parent.parent / "scripts" / "run_sweep.py"
+    spec = importlib.util.spec_from_file_location("_run_sweep_module", _path)
+    if spec is None or spec.loader is None:
+        return {}
+    mod = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(mod)  # type: ignore[union-attr]
+    except Exception as _e:
+        import warnings
+        warnings.warn(f"run_index: could not load SUBSET_LABELS from {_path}: {_e}")
+        return {}
+    return getattr(mod, "SUBSET_LABELS", {})
+
+
+SUBSET_LABELS: dict[str, list[str]] = _load_subset_labels()

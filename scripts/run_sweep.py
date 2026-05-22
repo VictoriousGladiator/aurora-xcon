@@ -89,10 +89,21 @@ COUNT_CONTROL_CONDITIONS = [
     dict(extinction_mode="random_fixed_count", target_extinction_count=12, top_k_percent=20),
     dict(extinction_mode="random_fixed_count", target_extinction_count=15, top_k_percent=20),
     dict(top_k_percent=20, extinction_mode="encoder_pre"),
-    dict(top_k_percent=20, extinction_mode="static", extinction_freq=133, remaining_prop=0.05),
-    dict(top_k_percent=20, extinction_mode="static", extinction_freq=167, remaining_prop=0.05),
+    dict(top_k_percent=20, extinction_mode="static", extinction_freq=33, remaining_prop=0.05),# 400/12
+    dict(top_k_percent=20, extinction_mode="static", extinction_freq=27, remaining_prop=0.05),# 400/15
 ]
 
+ALL_RELEVANT_CONDITIONS = [
+    dict(extinction_mode="random_fixed_count", target_extinction_count=12, top_k_percent=20),
+    dict(extinction_mode="random_fixed_count", target_extinction_count=15, top_k_percent=20),
+    dict(top_k_percent=20, extinction_mode="encoder_pre"),
+    dict(top_k_percent=20, extinction_mode="encoder_post"),
+    dict(top_k_percent=20, extinction_mode="static", extinction_freq=33, remaining_prop=0.05),# 400/12
+    dict(top_k_percent=20, extinction_mode="static", extinction_freq=27, remaining_prop=0.05),# 400/15
+    dict(top_k_percent=20, extinction_mode="static", extinction_freq=10, remaining_prop=0.05),# 400/15
+     dict(top_k_percent=20,
+         **{"adaptive_extinction.patience": 10, "adaptive_extinction.alpha": 0.2, "adaptive_extinction.cooldown": 10}),
+]
 SEEDS = [20, 42, 7, 13, 99]
 EXPERIMENTS = [dict(seed=s, **c) for c in COUNT_CONTROL_CONDITIONS for s in SEEDS]
 
@@ -194,6 +205,39 @@ def _experiment_key(exp: dict, reward_type: str) -> str:
         cond = mode
 
     return f"{reward_type}_{cond}_seed{seed}"
+
+
+def _cond_label(cond: dict) -> str:
+    """Return the evaluation condition label for a condition dict.
+
+    Derives the label from _experiment_key by stripping the reward-type prefix
+    and seed suffix, so it always matches what evaluation.run_index.condition_label()
+    returns for a completed run with that configuration.
+    """
+    key = _experiment_key({**cond, "seed": 0}, "final")
+    # key format: "final_{condition}_seed0"
+    return key[len("final_"):-len("_seed0")]
+
+
+# ---------------------------------------------------------------------------
+# Subset registry — single source of truth for condition groups.
+# Both the runner (--subset flag) and evaluation scripts (SUBSET_LABELS) use this.
+# To add a new group: define a condition list above and add it here. Done.
+# ---------------------------------------------------------------------------
+_SUBSETS: dict[str, list[dict]] = {
+    "main":          CONDITIONS,
+    "encoder":       ENCODER_CONDITIONS,
+    "new_triggers":  NEW_TRIGGER_CONDITIONS,
+    "count_control": COUNT_CONTROL_CONDITIONS,
+    "all_relevant":  ALL_RELEVANT_CONDITIONS,
+}
+
+# Labels derived directly from condition dicts — no manual sync needed.
+# dict.fromkeys preserves insertion order and silently deduplicates.
+SUBSET_LABELS: dict[str, list[str]] = {
+    name: list(dict.fromkeys(_cond_label(c) for c in conds))
+    for name, conds in _SUBSETS.items()
+}
 
 # ---------------------------------------------------------------------------
 # Skip logic
@@ -414,8 +458,8 @@ def _parse_args() -> tuple[bool, bool, bool, int, str, float, str]:
     if reward_type not in _REWARD_TYPES:
         print(f"ERROR: unknown --reward '{reward_type}'. Choose from: {_REWARD_TYPES}")
         sys.exit(1)
-    if subset not in ("main", "encoder", "new_triggers", "count_control"):
-        print(f"ERROR: unknown --subset '{subset}'. Choose from: main, encoder, new_triggers")
+    if subset not in _SUBSETS:
+        print(f"ERROR: unknown --subset '{subset}'. Choose from: {list(_SUBSETS)}")
         sys.exit(1)
     return dry_run, check, verbose, workers, reward_type, speed_bonus_factor, subset
 
@@ -427,14 +471,7 @@ def main() -> None:
     dry_run, check_mode, verbose, n_workers, reward_type, speed_bonus_factor, subset = _parse_args()
     project_root = Path(__file__).parent.parent
 
-    if subset == "encoder":
-        conditions = ENCODER_CONDITIONS
-    elif subset == "new_triggers":
-        conditions = NEW_TRIGGER_CONDITIONS
-    elif subset == "count_control":
-        conditions = COUNT_CONTROL_CONDITIONS
-    else:
-        conditions = CONDITIONS
+    conditions = _SUBSETS[subset]
     experiments = [dict(seed=s, **c) for c in conditions for s in SEEDS]
     n = len(experiments)
 

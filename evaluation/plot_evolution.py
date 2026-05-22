@@ -19,43 +19,37 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 
-from evaluation.run_index import scan_runs, condition_label
+from evaluation.run_index import scan_runs, condition_label, SUBSET_LABELS
 
 _PROJECT_ROOT = Path(__file__).parent.parent
 _EVAL_DIR = Path(__file__).parent
 _KHEPERAX_OFFSET = float(np.sqrt(2) * 100)
 
-# Fixed condition order — same as plot_comparison for consistency
-CONDITION_ORDER = [
-    "no_extinction",
-    "static",
-    "adaptive_default",
-    "adaptive_topk10",
-    "adaptive_topk30",
-    "adaptive_patience5",
-    "adaptive_patience20",
-    "adaptive_alpha01",
-    "adaptive_alpha03",
-    "encoder_post",
-    "enc_random_rate",
-    "d_min_trigger",
-    "ramped_prop",
-]
-
+# Human-readable display names for every known condition label.
+# Ordering comes from SUBSET_LABELS[subset] at runtime, not a hardcoded list.
 CONDITION_LABELS: dict[str, str] = {
-    "no_extinction":     "No Ext.",
-    "static":            "Static",
-    "adaptive_default":  "Fitness Trigger (default)",
-    "adaptive_topk10":   "top-k=10%",
-    "adaptive_topk30":   "top-k=30%",
-    "adaptive_patience5":  "patience=5",
-    "adaptive_patience20": "patience=20",
-    "adaptive_alpha01":  "α=0.1",
-    "adaptive_alpha03":  "α=0.3",
-    "encoder_post":      "Post-Encoder",
-    "enc_random_rate":   "Enc. Rate (random)",
-    "d_min_trigger":     "d_min Volatility Trigger",
-    "ramped_prop":       "Static + Ramped Prop.",
+    # main grid
+    "no_extinction":               "No Ext.",
+    "static_freq10":               "Static (f=10)",
+    "fitness_trigger_default":     "Fitness Trigger (default)",
+    "fitness_trigger_topk10":      "top-k=10%",
+    "fitness_trigger_topk30":      "top-k=30%",
+    "fitness_trigger_patience5":   "patience=5",
+    "fitness_trigger_patience20":  "patience=20",
+    "fitness_trigger_alpha01":     "α=0.1",
+    "fitness_trigger_alpha03":     "α=0.3",
+    # encoder subset
+    "encoder_post":          "Post-Encoder",
+    "enc_random_rate":       "Enc. Rate (random)",
+    # new triggers subset
+    "d_min_trigger":         "d_min Volatility Trigger",
+    "ramped_prop_freq10":    "Static + Ramped Prop.",
+    # count_control subset
+    "random_fixed_count_12": "Fixed Count=12",
+    "random_fixed_count_15": "Fixed Count=15",
+    "encoder_pre":           "Pre-Encoder",
+    "static_freq133":        "Static (f=133)",
+    "static_freq167":        "Static (f=167)",
 }
 
 # Metrics to plot: (csv_column, y-label, apply_offset_for_final)
@@ -104,11 +98,12 @@ def _plot_metric(
     column: str,
     ylabel: str,
     figures_dir: Path,
+    condition_order: list[str],
     suffix: str = "",
 ) -> None:
-    present = [c for c in CONDITION_ORDER if c in groups and groups[c]]
-    # Also include any conditions not in CONDITION_ORDER (e.g. new modes)
-    extras = [c for c in sorted(groups) if c not in CONDITION_ORDER and groups[c]]
+    present = [c for c in condition_order if c in groups and groups[c]]
+    # Also include any conditions not in the order list (e.g. new/unknown modes)
+    extras = [c for c in sorted(groups) if c not in condition_order and groups[c]]
     all_conditions = present + extras
 
     if not all_conditions:
@@ -162,9 +157,10 @@ def _plot_metric(
     print(f"Saved: {out_path}")
 
 
-def _parse_args() -> tuple[str, list[str] | None, str | None]:
+def _parse_args() -> tuple[str, str | None, list[str] | None, str | None]:
     args = sys.argv[1:]
     reward_type = "final"
+    subset: str | None = None
     conditions: list[str] | None = None
     tag: str | None = None
     i = 0
@@ -174,6 +170,10 @@ def _parse_args() -> tuple[str, list[str] | None, str | None]:
             reward_type = args[i + 1]; i += 2
         elif a.startswith("--reward="):
             reward_type = a.split("=", 1)[1]; i += 1
+        elif a == "--subset" and i + 1 < len(args):
+            subset = args[i + 1]; i += 2
+        elif a.startswith("--subset="):
+            subset = a.split("=", 1)[1]; i += 1
         elif a == "--tag" and i + 1 < len(args):
             tag = args[i + 1]; i += 2
         elif a.startswith("--tag="):
@@ -185,12 +185,14 @@ def _parse_args() -> tuple[str, list[str] | None, str | None]:
                 conditions.append(args[i]); i += 1
         else:
             i += 1
-    return reward_type, conditions, tag
+    return reward_type, subset, conditions, tag
 
 
-def _file_tag(condition_filter: list[str] | None, tag: str | None) -> str:
+def _file_tag(subset: str | None, condition_filter: list[str] | None, tag: str | None) -> str:
     if tag:
         return f"_{tag}"
+    if subset:
+        return f"_{subset}"
     if condition_filter:
         joined = "+".join(condition_filter)
         return f"_{joined}" if len(joined) <= 60 else f"_{joined[:57]}..."
@@ -198,9 +200,21 @@ def _file_tag(condition_filter: list[str] | None, tag: str | None) -> str:
 
 
 def main() -> None:
-    reward_type, condition_filter, tag = _parse_args()
-    suffix = _file_tag(condition_filter, tag)
+    reward_type, subset, condition_filter, tag = _parse_args()
+
+    if subset is not None and subset not in SUBSET_LABELS:
+        print(f"ERROR: unknown --subset '{subset}'. Choose from: {sorted(SUBSET_LABELS)}")
+        sys.exit(1)
+
+    suffix = _file_tag(subset, condition_filter, tag)
     figures_dir = _EVAL_DIR / "figures" / reward_type
+
+    # Determine which condition labels to include and in what order.
+    # --subset restricts to that group's labels; --conditions can further narrow.
+    condition_order: list[str] = SUBSET_LABELS.get(subset, []) if subset else []
+    allowed: set[str] | None = (
+        set(condition_order) if subset else None
+    )
 
     runs = scan_runs(_PROJECT_ROOT)
     complete = [r for r in runs if r["is_complete"] and r.get("reward_type", "final") == reward_type]
@@ -212,8 +226,10 @@ def main() -> None:
 
     all_labels = sorted({condition_label(r) for r in complete})
     print(f"All conditions in data: {all_labels}")
+    if subset:
+        print(f"Restricting to subset '{subset}': {condition_order}")
     if condition_filter:
-        print(f"Plotting subset: {condition_filter}")
+        print(f"Further filtering to: {condition_filter}")
     print()
 
     for column, ylabel in METRIC_CONFIGS:
@@ -221,13 +237,15 @@ def main() -> None:
         groups: dict[str, list[pd.Series]] = {}
         for run_info in complete:
             lbl = condition_label(run_info)
+            if allowed is not None and lbl not in allowed:
+                continue
             if condition_filter and lbl not in condition_filter:
                 continue
             series = _load_series(run_info["run_dir"], column)
             if series is not None:
                 groups.setdefault(lbl, []).append(series)
 
-        _plot_metric(groups, column, ylabel, figures_dir, suffix)
+        _plot_metric(groups, column, ylabel, figures_dir, condition_order, suffix)
 
     print(f"\nAll evolution plots saved to {figures_dir}")
 

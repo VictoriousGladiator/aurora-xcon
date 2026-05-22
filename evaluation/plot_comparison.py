@@ -16,35 +16,36 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
+from evaluation.run_index import SUBSET_LABELS
+
 _EVAL_DIR = Path(__file__).parent
 
-# Fixed x-axis order — consistent across all three plots
-CONDITION_ORDER = [
-    "no_extinction",
-    "static",
-    "adaptive_default",
-    "adaptive_topk10",
-    "adaptive_topk30",
-    "adaptive_patience5",
-    "adaptive_patience20",
-    "adaptive_alpha01",
-    "adaptive_alpha03",
-    "encoder_post",
-    "enc_random_rate",
-]
-
+# Human-readable display names for every known condition label.
+# plot_comparison uses SUBSET_LABELS[subset] for ordering and falls back to the
+# raw label string for any label not listed here.
 CONDITION_LABELS: dict[str, str] = {
-    "no_extinction":     "No Ext.",
-    "static":            "Static",
-    "adaptive_default":  "Adaptive\n(default)",
-    "adaptive_topk10":   "top-k\n=10%",
-    "adaptive_topk30":   "top-k\n=30%",
-    "adaptive_patience5":  "patience\n=5",
-    "adaptive_patience20": "patience\n=20",
-    "adaptive_alpha01":  "α=0.1",
-    "adaptive_alpha03":  "α=0.3",
-    "encoder_post":      "Post-\nEncoder",
-    "enc_random_rate":   "Enc. Rate\n(random)",
+    # main grid
+    "no_extinction":                "No Ext.",
+    "static_freq10":                "Static (f=10)",
+    "fitness_trigger_default":      "Fitness\nTrigger",
+    "fitness_trigger_topk10":       "top-k\n=10%",
+    "fitness_trigger_topk30":       "top-k\n=30%",
+    "fitness_trigger_patience5":    "patience\n=5",
+    "fitness_trigger_patience20":   "patience\n=20",
+    "fitness_trigger_alpha01":      "α=0.1",
+    "fitness_trigger_alpha03":      "α=0.3",
+    # encoder subset
+    "encoder_post":         "Post-\nEncoder",
+    "enc_random_rate":      "Enc. Rate\n(random)",
+    # new triggers subset
+    "d_min_trigger":        "d_min\nTrigger",
+    "ramped_prop_freq10":   "Ramped\nProp.",
+    # count_control subset
+    "random_fixed_count_12": "Fixed\nCount=12",
+    "random_fixed_count_15": "Fixed\nCount=15",
+    "encoder_pre":           "Pre-\nEncoder",
+    "static_freq133":        "Static\n(f=133)",
+    "static_freq167":        "Static\n(f=167)",
 }
 
 METRIC_CONFIGS = [
@@ -66,9 +67,24 @@ def _apply_style() -> None:
             continue
 
 
-def _plot_metric(df: pd.DataFrame, metric: str, ylabel: str, figures_dir: Path, suffix: str = "") -> None:
-    present = [c for c in CONDITION_ORDER if c in df["condition_label"].values]
+def _plot_metric(
+    df: pd.DataFrame,
+    metric: str,
+    ylabel: str,
+    figures_dir: Path,
+    condition_order: list[str],
+    suffix: str = "",
+) -> None:
+    # Use provided order; append any extra conditions found in the data not in the order list.
+    in_data = set(df["condition_label"].unique())
+    present = [c for c in condition_order if c in in_data]
+    extras  = [c for c in sorted(in_data) if c not in condition_order]
+    present = present + extras
     n = len(present)
+
+    if n == 0:
+        print(f"  No data for {metric}, skipping.")
+        return
 
     data_per_condition = [
         df.loc[df["condition_label"] == cond, metric].dropna().values
@@ -126,9 +142,10 @@ def _plot_metric(df: pd.DataFrame, metric: str, ylabel: str, figures_dir: Path, 
     print(f"Saved: {out_path}")
 
 
-def _parse_args() -> tuple[str, list[str] | None, str | None]:
+def _parse_args() -> tuple[str, str | None, list[str] | None, str | None]:
     args = sys.argv[1:]
     reward_type = "final"
+    subset: str | None = None
     conditions: list[str] | None = None
     tag: str | None = None
     i = 0
@@ -138,6 +155,10 @@ def _parse_args() -> tuple[str, list[str] | None, str | None]:
             reward_type = args[i + 1]; i += 2
         elif a.startswith("--reward="):
             reward_type = a.split("=", 1)[1]; i += 1
+        elif a == "--subset" and i + 1 < len(args):
+            subset = args[i + 1]; i += 2
+        elif a.startswith("--subset="):
+            subset = a.split("=", 1)[1]; i += 1
         elif a == "--tag" and i + 1 < len(args):
             tag = args[i + 1]; i += 2
         elif a.startswith("--tag="):
@@ -149,13 +170,15 @@ def _parse_args() -> tuple[str, list[str] | None, str | None]:
                 conditions.append(args[i]); i += 1
         else:
             i += 1
-    return reward_type, conditions, tag
+    return reward_type, subset, conditions, tag
 
 
-def _file_tag(condition_filter: list[str] | None, tag: str | None) -> str:
-    """Return a filename suffix: explicit tag > auto from conditions > empty."""
+def _file_tag(subset: str | None, condition_filter: list[str] | None, tag: str | None) -> str:
+    """Return a filename suffix: explicit tag > subset > auto from conditions > empty."""
     if tag:
         return f"_{tag}"
+    if subset:
+        return f"_{subset}"
     if condition_filter:
         joined = "+".join(condition_filter)
         return f"_{joined}" if len(joined) <= 60 else f"_{joined[:57]}..."
@@ -163,18 +186,29 @@ def _file_tag(condition_filter: list[str] | None, tag: str | None) -> str:
 
 
 def main() -> None:
-    reward_type, condition_filter, tag = _parse_args()
-    suffix = _file_tag(condition_filter, tag)
+    reward_type, subset, condition_filter, tag = _parse_args()
 
-    summary_csv = _EVAL_DIR / f"metrics_summary_{reward_type}.csv"
+    if subset is not None and subset not in SUBSET_LABELS:
+        print(f"ERROR: unknown --subset '{subset}'. Choose from: {sorted(SUBSET_LABELS)}")
+        sys.exit(1)
+
+    suffix = _file_tag(subset, condition_filter, tag)
+
+    # Prefer the subset-specific CSV produced by compute_metrics --subset <name>
+    csv_tag = f"_{subset}" if subset else ""
+    summary_csv = _EVAL_DIR / f"metrics_summary_{reward_type}{csv_tag}.csv"
     figures_dir = _EVAL_DIR / "figures" / reward_type
 
     if not summary_csv.exists():
+        hint = f"--subset {subset} " if subset else ""
         raise FileNotFoundError(
             f"{summary_csv} not found. "
-            f"Run `python -m evaluation.compute_metrics --reward {reward_type}` first."
+            f"Run `python -m evaluation.compute_metrics --reward {reward_type} {hint}` first."
         )
     df = pd.read_csv(summary_csv)
+
+    # Determine the x-axis order: subset order > sorted data
+    condition_order: list[str] = SUBSET_LABELS.get(subset, []) if subset else []
 
     all_conds = sorted(df["condition_label"].unique())
     print(f"Loaded {len(df)} rows from {summary_csv}")
@@ -188,7 +222,7 @@ def main() -> None:
     print()
 
     for metric, ylabel in METRIC_CONFIGS:
-        _plot_metric(df, metric, ylabel, figures_dir, suffix)
+        _plot_metric(df, metric, ylabel, figures_dir, condition_order, suffix)
 
     print(f"\nAll plots saved to {figures_dir}")
 
