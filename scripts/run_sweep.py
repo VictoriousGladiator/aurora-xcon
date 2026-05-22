@@ -127,44 +127,71 @@ def _log(msg: str) -> None:
 # Unique output directory key — one deterministic path per (experiment, reward)
 # ---------------------------------------------------------------------------
 
+# Declares which extra parameters to embed in the output dir name for each mode.
+# Each entry: extinction_mode -> [(exp_dict_key, label_prefix), ...]
+#   - label_prefix + value are joined with no separator (e.g. "freq" + "133" -> "freq133")
+#   - empty label_prefix means just append the value directly
+#   - modes not listed here fall back to mode name only (or fitness_trigger logic)
+# To add a new mode: just add an entry here — no if/elif needed.
+_MODE_VARIANT_PARAMS: dict[str, list[tuple[str, str]]] = {
+    "off":                       [],
+    "static":                    [("extinction_freq",              "freq")],
+    "static_ramped_proportion":  [("extinction_freq",              "freq")],
+    "random_fixed_count":        [("target_extinction_count",      "")],
+    "encoder_post":              [],
+    "encoder_pre":               [],
+    "random_encoder_rate":       [],
+    "d_min_trigger":             [
+        ("adaptive_extinction.d_min_patience", "dp"),
+        ("adaptive_extinction.d_min_alpha",    "da"),
+    ],
+}
+
+
 def _experiment_key(exp: dict, reward_type: str) -> str:
     """Return a filesystem-safe, unique key for this (experiment, reward_type) pair.
 
     Used as the Hydra run dir so parallel workers never share a timestamp folder.
-    Example: 'final_topk10_seed20', 'final_speed_patience5_seed42'
+    The condition segment is built from _MODE_VARIANT_PARAMS so that adding a new
+    mode only requires a dict entry above — no if/elif chain needed.
+
+    Examples:
+        static, freq=133         -> 'final_static_freq133_seed20'
+        random_fixed_count, n=12 -> 'final_random_fixed_count_12_seed20'
+        encoder_pre              -> 'final_encoder_pre_seed20'
+        fitness_trigger, topk=10 -> 'final_fitness_trigger_topk10_seed20'
     """
     mode = exp.get("extinction_mode", "fitness_trigger")
     seed = exp.get("seed", 0)
-    topk = int(exp.get("top_k_percent", 20))
-    pat  = int(exp.get("adaptive_extinction.patience", 10))
-    alpha_str = f"{float(exp.get('adaptive_extinction.alpha', 0.2)):.1f}".replace(".", "")
 
     if mode == "off":
         cond = "no_extinction"
-    elif mode == "static":
-        cond = f"static_f{exp.get('extinction_freq', 10)}"
-    elif mode == "encoder_post":
-        cond = "encoder_post"
-    elif mode == "encoder_pre":
-        cond = "encoder_pre"
-    elif mode == "random_encoder_rate":
-        cond = "enc_random_rate"
-    elif mode == "d_min_trigger":
-        cond = "d_min_trigger"
-    elif mode == "static_ramped_proportion":
-        cond = f"ramped_prop_f{exp.get('extinction_freq', 10)}"
-    elif mode == "random_fixed_count":
-        cond = f"random_ext_{exp.get('target_extinction_count', 13)}"
-        
-    else:
+
+    elif mode in _MODE_VARIANT_PARAMS:
+        parts: list[str] = [mode]
+        for exp_key, label in _MODE_VARIANT_PARAMS[mode]:
+            val = exp.get(exp_key, "?")
+            if isinstance(val, float):
+                val = f"{val:.1f}".replace(".", "")
+            parts.append(f"{label}{val}")
+        cond = "_".join(parts)
+
+    elif mode == "fitness_trigger":
+        topk      = int(exp.get("top_k_percent", 20))
+        pat       = int(exp.get("adaptive_extinction.patience", 10))
+        alpha_str = f"{float(exp.get('adaptive_extinction.alpha', 0.2)):.1f}".replace(".", "")
         if topk != 20:
-            cond = f"topk{topk}"
+            cond = f"fitness_trigger_topk{topk}"
         elif pat != 10:
-            cond = f"patience{pat}"
+            cond = f"fitness_trigger_patience{pat}"
         elif alpha_str != "02":
-            cond = f"alpha{alpha_str}"
+            cond = f"fitness_trigger_alpha{alpha_str}"
         else:
-            cond = "default"
+            cond = "fitness_trigger_default"
+
+    else:
+        # Unknown / future mode — use mode name verbatim so it still gets a sane dir
+        cond = mode
 
     return f"{reward_type}_{cond}_seed{seed}"
 
@@ -354,7 +381,7 @@ def _parse_args() -> tuple[bool, bool, bool, int, str, float, str]:
     workers = 1
     reward_type = _DEFAULT_REWARD
     speed_bonus_factor = 1.0
-    subset = "main"   # "main" | "encoder"
+    subset = "count_control"   # default: run only COUNT_CONTROL_CONDITIONS
     for i, a in enumerate(args):
         if a == "--workers" and i + 1 < len(args):
             try:

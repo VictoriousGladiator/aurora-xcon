@@ -11,3 +11,4 @@ build_container.sh
 docker-compose.cpu.yml
 docker-compose.yml
 Dockerfile
+.claude/

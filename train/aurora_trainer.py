@@ -870,6 +870,10 @@ def main(cfg: DictConfig) -> None:
                 "speed_bonus_factor": float(getattr(cfg.env, "speed_bonus_factor", 1.0)),
                 "log_answer_set_geometry": bool(getattr(cfg, "log_answer_set_geometry", True)),
                 "target_extinction_count": int(cfg.target_extinction_count),
+                # Mode-specific scheduling params — needed so evaluation scripts can
+                # distinguish e.g. static_freq133 from static_freq167 after the run.
+                "extinction_freq": int(cfg.extinction_freq),
+                "remaining_prop": float(cfg.remaining_prop),
             }),
             str(_run_dir / "config.yaml"),
         )

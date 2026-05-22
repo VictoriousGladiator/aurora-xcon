@@ -84,6 +84,7 @@ def scan_runs(project_root: Path) -> list[dict]:
             "cooldown": int(ae.get("cooldown", _DEFAULTS["cooldown"])),
             "extinction_freq": int(cfg.get("extinction_freq", _DEFAULTS["extinction_freq"])),
             "remaining_prop": float(cfg.get("remaining_prop", _DEFAULTS["remaining_prop"])),
+            "target_extinction_count": cfg.get("target_extinction_count", None),
             # reward_type absent in old configs → infer from deterministic dir name if possible,
             # otherwise default to "final".
             # New-style paths: output/{reward_type}_{condition}_seed{N}/runs/...
@@ -127,7 +128,7 @@ def condition_label(cfg: dict) -> str:
     if mode == "off":
         return "no_extinction"
     if mode == "static":
-        return "static"
+        return f"static_freq{cfg['extinction_freq']}"
     if mode == "encoder_post":
         return "encoder_post"
     if mode == "encoder_pre":
@@ -137,10 +138,10 @@ def condition_label(cfg: dict) -> str:
     if mode == "d_min_trigger":
         return "d_min_trigger"
     if mode == "static_ramped_proportion":
-        return "ramped_prop"
-    
+        return f"ramped_prop_freq{cfg['extinction_freq']}"
     if mode == "random_fixed_count":
-        return f"random_ext_{cfg.get('target_extinction_count', '?')}"
+        count = cfg.get("target_extinction_count", "?")
+        return f"random_fixed_count_{count}"
 
     # fitness_trigger (and legacy "adaptive") — distinguish by topk/patience/alpha
     topk = int(cfg["top_k_percent"])
