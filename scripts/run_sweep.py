@@ -287,21 +287,38 @@ def _check_run_dir(run_dir: Path, exp_dict: dict, reward_type: str) -> bool:
         return False
 
 
-def _find_complete_run(project_root: Path, exp_dict: dict, reward_type: str = "final") -> Path | None:
-    # Fast path: check the deterministic location first (new-style runs)
+def _collect_all_run_dirs(project_root: Path) -> list[Path]:
+    """Return every run_dir found under output/ — called once and cached by main().
+
+    A run_dir is the immediate parent of a config.yaml inside a runs/ subdirectory.
+    """
+    return [p.parent for p in (project_root / "output").rglob("runs/*/config.yaml")]
+
+
+def _find_complete_run(
+    exp_dict: dict,
+    reward_type: str,
+    project_root: Path,
+    all_run_dirs: list[Path],
+) -> Path | None:
+    """Return a matching complete run_dir, or None.
+
+    Checks the deterministic fast-path dir first, then searches the pre-scanned
+    all_run_dirs list — no repeated rglob calls.
+    """
     key = _experiment_key(exp_dict, reward_type)
+
+    # Fast path: deterministic new-style location
     known_runs = project_root / "output" / key / "runs"
     if known_runs.exists():
         for run_dir in known_runs.iterdir():
             if run_dir.is_dir() and _check_run_dir(run_dir, exp_dict, reward_type):
                 return run_dir
 
-    # Fallback: scan old-style date/time output dirs
-    for cfg_path in (project_root / "output").rglob("runs/*/config.yaml"):
-        run_dir = cfg_path.parent
-        # Skip dirs already checked via fast path
+    # Fallback: check against the already-collected list (no new rglob)
+    for run_dir in all_run_dirs:
         if run_dir.parts[-3] == key:
-            continue
+            continue  # already checked above
         if _check_run_dir(run_dir, exp_dict, reward_type):
             return run_dir
 
@@ -479,11 +496,23 @@ def main() -> None:
     if reward_type == "final_speed":
         reward_overrides.append(f"env.speed_bonus_factor={speed_bonus_factor}")
 
+    if dry_run:
+        print(f"Dry run — {n} commands  [subset={subset}, reward={reward_type}]:\n")
+        for exp in experiments:
+            key = _experiment_key(exp, reward_type)
+            extra = list(reward_overrides) + [f"hydra.run.dir=output/{key}"]
+            print("$ " + " ".join(_build_cmd(exp, extra)))
+        return
+
+    # Collect all existing run dirs once — avoids one rglob per experiment.
+    print("Scanning for completed runs...", flush=True)
+    all_run_dirs = _collect_all_run_dirs(project_root)
+
     if check_mode:
         print(f"Checking {n} (condition, seed) pairs  [reward={reward_type}]...\n")
         complete = 0
         for i, exp in enumerate(experiments, 1):
-            run_dir = _find_complete_run(project_root, exp, reward_type)
+            run_dir = _find_complete_run(exp, reward_type, project_root, all_run_dirs)
             label   = _short_label(exp)
             status  = f"[DONE]    {run_dir}" if run_dir else "[MISSING]"
             print(f"  [{i:3d}/{n}] {label:60s} {status}")
@@ -492,17 +521,10 @@ def main() -> None:
         print(f"\n{complete}/{n} complete.")
         return
 
-    if dry_run:
-        print(f"Dry run — {n} commands  [subset={subset}, reward={reward_type}]:\n")
-        # subset=new_triggers: 2 conditions × 5 seeds = 10 runs
-        for exp in experiments:
-            key = _experiment_key(exp, reward_type)
-            extra = list(reward_overrides) + [f"hydra.run.dir=output/{key}"]
-            print("$ " + " ".join(_build_cmd(exp, extra)))
-        return
-
-    print("Scanning for completed runs...", flush=True)
-    pending = [exp for exp in experiments if _find_complete_run(project_root, exp, reward_type) is None]
+    pending = [
+        exp for exp in experiments
+        if _find_complete_run(exp, reward_type, project_root, all_run_dirs) is None
+    ]
     n_skip  = n - len(pending)
     if n_skip:
         print(f"Skipping {n_skip} already-complete run(s).")
