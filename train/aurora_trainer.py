@@ -243,7 +243,6 @@ def sample_fixed_count(eligible, n, rng, ae_cfg, num_generations):
                         chosen[i] = num_generations - 1
                     else:
                         chosen[i] = chosen[i] + ae_cfg.adaptive_extinction.cooldown
-            raise ValueError(f'chosen: {chosen}, cooldown: {ae_cfg.adaptive_extinction.cooldown}, num_generations: {num_generations}')
             return frozenset(chosen)
     raise ValueError(f"Could only place {len(chosen)}/{n} extinctions; relax cooldown or warmup")
 
@@ -459,15 +458,7 @@ def train(
                 logger.save_archive_checkpoint(actual_gen, _Z_ckpt, fits_np)
 
         # Apply extinction before encoder (all modes except encoder_post)
-        if is_ext and cfg.extinction_mode != "encoder_post":
-            logging.info("Extinction event...")
-            random_key, subkey = jax.random.split(random_key)
-            repertoire = repertoire.extinction(
-                remaining_prop=_remaining_prop, random_key=subkey
-            )
-            _last_extinction_iter = i
-        
-        if is_ext and cfg.extinction_mode != "encoder_pre":
+        if is_ext and (cfg.extinction_mode != "encoder_post" or cfg.extinction_mode != "encoder_pre"):
             logging.info("Extinction event...")
             random_key, subkey = jax.random.split(random_key)
             repertoire = repertoire.extinction(
@@ -503,6 +494,36 @@ def train(
                 lambda metric: "{0:.4f}".format(float(metric[-1])), model_metrics
             )
 
+            logging.info(metrics_last_iter)
+            if logger is not None:
+                _valid = repertoire.fitnesses != -jnp.inf
+                _descs = np.asarray(repertoire.descriptors[_valid])
+                logger.log_encoder_retrain(
+                    generation=(i + 1) * cfg.metrics_log_period,
+                    model_metrics=model_metrics,
+                    old_aurora_extra_info=_old_extra_info,
+                    new_aurora_extra_info=aurora_extra_info,
+                    encoder_fn=aurora._encoder_fn,
+                    archived_descriptors=_descs,
+                )
+        
+        # ENCODER PRE
+        if (i - 1) in schedules and not cfg.no_training:
+            logging.info("Updating AE...")
+            start_time = time.time()
+            # cache encoder state for drift computation
+            if logger is not None:
+                _old_extra_info = aurora_extra_info
+            # train the autoencoder
+            random_key, subkey = jax.random.split(random_key)
+            if cfg.reinit_params:
+                train_state = train_state.replace(params=model_params)
+            repertoire, train_state, aurora_extra_info, model_metrics = aurora.train(
+                repertoire, train_state, subkey
+            )
+            ae_timelapse = time.time() - start_time
+
+            # encoder_post: apply extinction after encoder retraining
             if is_ext and cfg.extinction_mode == "encoder_pre":
                 logging.info("Extinction event (pre-encoder)...")
                 random_key, subkey = jax.random.split(random_key)
