@@ -130,12 +130,17 @@ def condition_label(cfg: dict) -> str:
         return "static"
     if mode == "encoder_post":
         return "encoder_post"
+    if mode == "encoder_pre":
+        return "encoder_pre"
     if mode == "random_encoder_rate":
         return "enc_random_rate"
     if mode == "d_min_trigger":
         return "d_min_trigger"
     if mode == "static_ramped_proportion":
         return "ramped_prop"
+    
+    if mode == "random_fixed_count":
+        return f"random_ext_{cfg.get('target_extinction_count', '?')}"
 
     # fitness_trigger (and legacy "adaptive") — distinguish by topk/patience/alpha
     topk = int(cfg["top_k_percent"])

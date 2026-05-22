@@ -39,6 +39,7 @@ BASE_CMD = [
     "env=kheperax",
     "loss_type=triplet",
     "extinction_mode=fitness_trigger",
+    "wandb.mode=offline",
     "hydra.verbose=false",
 ]
 
@@ -84,8 +85,16 @@ NEW_TRIGGER_CONDITIONS = [
             "adaptive_extinction.ramped_prop_max": 0.40}),
 ]
 
+COUNT_CONTROL_CONDITIONS = [
+    dict(extinction_mode="random_fixed_count", target_extinction_count=12, top_k_percent=20),
+    dict(extinction_mode="random_fixed_count", target_extinction_count=15, top_k_percent=20),
+    dict(top_k_percent=20, extinction_mode="encoder_pre"),
+    dict(top_k_percent=20, extinction_mode="static", extinction_freq=133, remaining_prop=0.05),
+    dict(top_k_percent=20, extinction_mode="static", extinction_freq=167, remaining_prop=0.05),
+]
+
 SEEDS = [20, 42, 7, 13, 99]
-EXPERIMENTS = [dict(seed=s, **c) for c in CONDITIONS for s in SEEDS]
+EXPERIMENTS = [dict(seed=s, **c) for c in COUNT_CONTROL_CONDITIONS for s in SEEDS]
 
 # ---------------------------------------------------------------------------
 # Defaults matching aurora.yaml
@@ -136,12 +145,17 @@ def _experiment_key(exp: dict, reward_type: str) -> str:
         cond = f"static_f{exp.get('extinction_freq', 10)}"
     elif mode == "encoder_post":
         cond = "encoder_post"
+    elif mode == "encoder_pre":
+        cond = "encoder_pre"
     elif mode == "random_encoder_rate":
         cond = "enc_random_rate"
     elif mode == "d_min_trigger":
         cond = "d_min_trigger"
     elif mode == "static_ramped_proportion":
         cond = f"ramped_prop_f{exp.get('extinction_freq', 10)}"
+    elif mode == "random_fixed_count":
+        cond = f"random_ext_{exp.get('target_extinction_count', 13)}"
+        
     else:
         if topk != 20:
             cond = f"topk{topk}"
@@ -373,7 +387,7 @@ def _parse_args() -> tuple[bool, bool, bool, int, str, float, str]:
     if reward_type not in _REWARD_TYPES:
         print(f"ERROR: unknown --reward '{reward_type}'. Choose from: {_REWARD_TYPES}")
         sys.exit(1)
-    if subset not in ("main", "encoder", "new_triggers"):
+    if subset not in ("main", "encoder", "new_triggers", "count_control"):
         print(f"ERROR: unknown --subset '{subset}'. Choose from: main, encoder, new_triggers")
         sys.exit(1)
     return dry_run, check, verbose, workers, reward_type, speed_bonus_factor, subset
@@ -390,6 +404,8 @@ def main() -> None:
         conditions = ENCODER_CONDITIONS
     elif subset == "new_triggers":
         conditions = NEW_TRIGGER_CONDITIONS
+    elif subset == "count_control":
+        conditions = COUNT_CONTROL_CONDITIONS
     else:
         conditions = CONDITIONS
     experiments = [dict(seed=s, **c) for c in conditions for s in SEEDS]

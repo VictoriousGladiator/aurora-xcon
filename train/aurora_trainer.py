@@ -122,9 +122,9 @@ def _check_hybrid_trigger(
         )
 
     Triggers when:
-      1. d_min stagnates AND fitness stagnates
+      1. d_min stagnates AND fitness stagnates (after post-extinction re-arm)
       OR
-      2. d_min remains very high for too long
+      2. d_min is inf/nan (immediate), or stays above threshold for high_d_min_patience
     """
     nan = float("nan")
 
@@ -144,11 +144,21 @@ def _check_hybrid_trigger(
 
     # d_min stagnation
     d_hist = list(dmin_history)
+    current_dmin = float(d_hist[-1])
+    finite_d = [float(x) for x in d_hist if math.isfinite(float(x))]
+    dmin_range = (
+        max(finite_d) - min(finite_d) if finite_d else float("nan")
+    )
 
-    dmin_range = max(d_hist) - min(d_hist)
+    rearmed = state.get("dmin_rearmed", True)
+    if not rearmed and math.isfinite(dmin_range):
+        if dmin_range > ae_cfg.d_min_stagnation_threshold:
+            rearmed = True
+            state["dmin_rearmed"] = True
 
     dmin_stagnating = (
-        dmin_range < ae_cfg.d_min_stagnation_threshold
+        math.isfinite(dmin_range)
+        and dmin_range < ae_cfg.d_min_stagnation_threshold
     )
 
     # Fitness stagnation
@@ -167,40 +177,40 @@ def _check_hybrid_trigger(
         < ae_cfg.fitness_improvement_threshold
     )
 
-    # Accumulate patience counters
-    state["dmin_stagnant_count"] = (
-        state["dmin_stagnant_count"] + 1
-        if dmin_stagnating
-        else 0
-    )
+    # Accumulate patience counters (only after post-extinction re-arm)
+    if rearmed:
+        state["dmin_stagnant_count"] = (
+            state["dmin_stagnant_count"] + 1
+            if dmin_stagnating
+            else 0
+        )
 
-    state["fitness_stagnant_count"] = (
-        state["fitness_stagnant_count"] + 1
-        if fitness_stagnating
-        else 0
-    )
+        state["fitness_stagnant_count"] = (
+            state["fitness_stagnant_count"] + 1
+            if fitness_stagnating
+            else 0
+        )
+    else:
+        state["dmin_stagnant_count"] = 0
+        state["fitness_stagnant_count"] = 0
 
-    # Emergency high-d_min trigger
-    current_dmin = d_hist[-1]
-
-    state["high_dmin_count"] = (
-        state["high_dmin_count"] + 1
-        if current_dmin > ae_cfg.high_d_min_threshold
-        else 0
-    )
-
-    emergency_trigger = (
-        state["high_dmin_count"]
-        >= ae_cfg.high_d_min_patience
-    )
+    # Emergency: inf/nan d_min fires immediately; high d_min uses patience
+    if not math.isfinite(current_dmin):
+        emergency_trigger = True
+    elif rearmed and current_dmin > ae_cfg.high_d_min_threshold:
+        state["high_dmin_count"] = state["high_dmin_count"] + 1
+        emergency_trigger = (
+            state["high_dmin_count"] >= ae_cfg.high_d_min_patience
+        )
+    else:
+        state["high_dmin_count"] = 0
+        emergency_trigger = False
 
     # Main trigger
     hybrid_trigger = (
-        state["dmin_stagnant_count"]
-        >= ae_cfg.d_min_patience
-        and
-        state["fitness_stagnant_count"]
-        >= ae_cfg.fitness_patience
+        rearmed
+        and state["dmin_stagnant_count"] >= ae_cfg.d_min_patience
+        and state["fitness_stagnant_count"] >= ae_cfg.fitness_patience
     )
 
     triggered = emergency_trigger or hybrid_trigger
@@ -210,12 +220,32 @@ def _check_hybrid_trigger(
         state["dmin_stagnant_count"] = 0
         state["fitness_stagnant_count"] = 0
         state["high_dmin_count"] = 0
+        state["dmin_rearmed"] = False
 
     return (
         triggered,
         dmin_range,
         rel_improvement,
     )
+
+def sample_fixed_count(eligible, n, rng, ae_cfg, num_generations):
+    pool = rng.permutation(eligible)
+    chosen = []
+    last = -10**9
+    for it in pool:
+        chosen.append(int(it))
+        last = int(it)
+        if len(chosen) == n:
+            chosen = sorted(chosen)
+            for i in range(1, len(chosen)):
+                if chosen[i] - chosen[i - 1] < ae_cfg.adaptive_extinction.cooldown:
+                    if chosen[i] + ae_cfg.adaptive_extinction.cooldown > num_generations - 1:
+                        chosen[i] = num_generations - 1
+                    else:
+                        chosen[i] = chosen[i] + ae_cfg.adaptive_extinction.cooldown
+            raise ValueError(f'chosen: {chosen}, cooldown: {ae_cfg.adaptive_extinction.cooldown}, num_generations: {num_generations}')
+            return frozenset(chosen)
+    raise ValueError(f"Could only place {len(chosen)}/{n} extinctions; relax cooldown or warmup")
 
 
 def train(
@@ -263,10 +293,18 @@ def train(
         maxlen=cfg.adaptive_extinction.fitness_window
     )
 
+    rng = np.random.default_rng(cfg.seed + 99991)
+    eligible = np.arange(0, num_generations - 1)
+    
+    _extinction_schedule = sample_fixed_count(
+        eligible, n=cfg.target_extinction_count, rng=rng, ae_cfg=cfg, num_generations=num_generations
+    )
+
     _trigger_state = {
         "dmin_stagnant_count": 0,
         "fitness_stagnant_count": 0,
         "high_dmin_count": 0,
+        "dmin_rearmed": True,
     }
 
     for i in range(num_generations):
@@ -333,7 +371,7 @@ def train(
         is_ext = False
         if i != num_generations - 1:
             if cfg.extinction_mode == "static":
-                is_ext = (i + 1) % cfg.extinction_freq == 0
+                is_ext = (i + 1) % cfg.extinction_freq == 0 
             elif cfg.extinction_mode == "fitness_trigger":
                 fired, rr, hr, ratio = _check_fitness_trigger(
                     _top_k_history, _last_extinction_iter, i, cfg.adaptive_extinction
@@ -373,10 +411,17 @@ def train(
             elif cfg.extinction_mode == "encoder_post":
                 # Logged as extinction on this iteration; applied after encoder retrains below.
                 is_ext = bool((i + 1) in schedules) and not cfg.no_training
+            elif cfg.extinction_mode == "encoder_pre":
+                # Logged as extinction on this iteration; applied after encoder retrains below.
+                is_ext = bool((i - 1) in schedules) and not cfg.no_training
             elif cfg.extinction_mode == "random_encoder_rate":
                 # Stochastic trigger with same expected frequency as encoder training.
                 random_key, subkey = jax.random.split(random_key)
                 is_ext = bool(jax.random.bernoulli(subkey, p=_p_random_ext))
+            
+            elif cfg.extinction_mode == "random_fixed_count":
+                is_ext = i in _extinction_schedule
+
 
         # Compute remaining_prop for this potential extinction event.
         # static_ramped_proportion ramps from prop_min to prop_max over training.
@@ -421,6 +466,14 @@ def train(
                 remaining_prop=_remaining_prop, random_key=subkey
             )
             _last_extinction_iter = i
+        
+        if is_ext and cfg.extinction_mode != "encoder_pre":
+            logging.info("Extinction event...")
+            random_key, subkey = jax.random.split(random_key)
+            repertoire = repertoire.extinction(
+                remaining_prop=_remaining_prop, random_key=subkey
+            )
+            _last_extinction_iter = i
 
         # AE
         if (i + 1) in schedules and not cfg.no_training:
@@ -449,6 +502,18 @@ def train(
             metrics_last_iter = jax.tree_util.tree_map(
                 lambda metric: "{0:.4f}".format(float(metric[-1])), model_metrics
             )
+
+            if is_ext and cfg.extinction_mode == "encoder_pre":
+                logging.info("Extinction event (pre-encoder)...")
+                random_key, subkey = jax.random.split(random_key)
+                repertoire = repertoire.extinction(
+                    remaining_prop=_remaining_prop, random_key=subkey
+                )
+                _last_extinction_iter = i
+            metrics_last_iter = jax.tree_util.tree_map(
+                lambda metric: "{0:.4f}".format(float(metric[-1])), model_metrics
+            )
+
             logging.info(metrics_last_iter)
             if logger is not None:
                 _valid = repertoire.fitnesses != -jnp.inf
@@ -783,6 +848,7 @@ def main(cfg: DictConfig) -> None:
                 "reward_type": str(cfg.env.reward_type),
                 "speed_bonus_factor": float(getattr(cfg.env, "speed_bonus_factor", 1.0)),
                 "log_answer_set_geometry": bool(getattr(cfg, "log_answer_set_geometry", True)),
+                "target_extinction_count": int(cfg.target_extinction_count),
             }),
             str(_run_dir / "config.yaml"),
         )
