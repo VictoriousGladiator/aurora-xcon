@@ -1,0 +1,28 @@
+env: kheperax
+seed: 42
+extinction_mode: encoder_pre
+top_k_percent: 20
+adaptive_extinction:
+  warmup: 50
+  patience: 10
+  alpha: 0.2
+  cooldown: 10
+  d_min_patience: 5
+  d_min_alpha: 0.2
+  d_min_warmup: 25
+  d_min_cooldown: 5
+  d_min_window: 10
+  fitness_window: 10
+  d_min_stagnation_threshold: 0.03
+  fitness_improvement_threshold: 0.05
+  high_d_min_threshold: 0.75
+  high_d_min_patience: 12
+  fitness_patience: 5
+  ramped_prop_min: 0.05
+  ramped_prop_max: 0.4
+reward_type: final
+speed_bonus_factor: 1.0
+log_answer_set_geometry: true
+target_extinction_count: 13
+extinction_freq: 10
+remaining_prop: 0.05

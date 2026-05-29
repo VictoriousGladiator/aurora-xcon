@@ -258,7 +258,79 @@ def save_latent_snapshot(repertoire, cfg, path: str, title: str):
         fig.suptitle(title, fontsize=14)
         fig.savefig(path, dpi=150, bbox_inches="tight")
         plt.close(fig)
-  
+
+
+
+
+
+# ADDED SAFE KEEP EXTINCTION
+def _safe_keep_prop(cfg) -> float:
+    sk = cfg.safe_keep
+    if hasattr(sk, "keep_prop"):
+        return float(sk.keep_prop)
+    if hasattr(sk, "remaining_prop"):
+        return float(sk.remaining_prop)
+    return float(cfg.remaining_prop)
+
+
+def _descriptor_safe_keep_mask(repertoire, cfg, random_key):
+    valid = repertoire.fitnesses != -jnp.inf
+    n_valid = int(jnp.sum(valid))
+
+    keep_mask = jnp.zeros_like(valid, dtype=bool)
+    if n_valid == 0:
+        return keep_mask
+
+    sk = cfg.safe_keep
+    keep_prop = _safe_keep_prop(cfg)
+    k = max(1, int(np.floor(keep_prop * n_valid)))
+
+    P = repertoire.passive_descriptors
+    x = P[:, 0]
+    y = P[:, 1]
+
+    x_ok = ((x >= float(sk.x_min)) & (x <= float(sk.x_max))).astype(jnp.float32)
+    y_ok = (y >= float(sk.y_min_soft)).astype(jnp.float32)
+
+    score = float(sk.w_x_range) * x_ok + float(sk.w_y_high) * y_ok
+
+    eps = float(sk.jitter_eps)
+    if eps > 0.0:
+        noise = jax.random.uniform(random_key, shape=score.shape)
+        score = score + eps * noise
+
+    # never select invalid cells
+    score = jnp.where(valid, score, -jnp.inf)
+
+    top_idx = jnp.argsort(score)[-k:]
+    keep_mask = keep_mask.at[top_idx].set(True)
+    return keep_mask
+
+
+def _apply_extinction_by_mode(repertoire, cfg, remaining_prop: float, random_key):
+    mode = str(cfg.extinction_mode)
+
+    if bool(cfg.safe_keep.enabled):
+        # split key for deterministic tie-break jitter
+        random_key, score_key = jax.random.split(random_key)
+        keep_mask = _descriptor_safe_keep_mask(repertoire, cfg, score_key)
+
+        if not hasattr(repertoire, "extinction_keep_mask"):
+            raise ValueError(
+                "descriptor_safe requires repertoire.extinction_keep_mask(...)"
+            )
+
+        repertoire = repertoire.extinction_keep_mask(keep_mask)
+        return repertoire, random_key
+
+    repertoire = repertoire.extinction(remaining_prop=remaining_prop, random_key=random_key)
+    return repertoire, random_key
+# END ADDED SAFE KEEP EXTINCTION
+
+
+
+
+
 
 def train(
     cfg: DictConfig,
@@ -426,7 +498,7 @@ def train(
                 is_ext = bool((i + 1) in schedules) and not cfg.no_training
             elif cfg.extinction_mode == "encoder_pre":
                 # Logged as extinction on this iteration; applied after encoder retrains below.
-                is_ext = bool((i - 1) in schedules) and not cfg.no_training
+                is_ext = bool((i + 1) in schedules) and not cfg.no_training
             elif cfg.extinction_mode == "random_encoder_rate":
                 # Stochastic trigger with same expected frequency as encoder training.
                 random_key, subkey = jax.random.split(random_key)
@@ -482,9 +554,14 @@ def train(
                 save_latent_snapshot(repertoire, cfg, str(before_path), title=f"Latent Space - Gen {actual_gen} (Before Extinction)")
 
             random_key, subkey = jax.random.split(random_key)
-            repertoire = repertoire.extinction(
-                remaining_prop=_remaining_prop, random_key=subkey
+            # ADDED SAFE KEEP EXTINCTION
+            repertoire, _ = _apply_extinction_by_mode(
+                repertoire=repertoire,
+                cfg=cfg,
+                remaining_prop=_remaining_prop,
+                random_key=subkey,
             )
+            # END ADDED SAFE KEEP EXTINCTION
             _last_extinction_iter = i
             _actual_extinction_iters.append(i)
 
@@ -520,9 +597,14 @@ def train(
                     save_latent_snapshot(repertoire, cfg, str(before_path), title=f"Latent Space - Gen {actual_gen} (Before Extinction)")
 
                 random_key, subkey = jax.random.split(random_key)
-                repertoire = repertoire.extinction(
-                    remaining_prop=_remaining_prop, random_key=subkey
+                # ADDED SAFE KEEP EXTINCTION
+                repertoire, _ = _apply_extinction_by_mode(
+                    repertoire=repertoire,
+                    cfg=cfg,
+                    remaining_prop=_remaining_prop,
+                    random_key=subkey,
                 )
+                # END ADDED SAFE KEEP EXTINCTION
                 _last_extinction_iter = i
                 _actual_extinction_iters.append(i)
 
@@ -548,7 +630,35 @@ def train(
                 )
         
         # ENCODER PRE
-        if (i - 1) in schedules and not cfg.no_training:
+        if (i + 1) in schedules and not cfg.no_training:
+
+            # encoder_pre: apply extinction before encoder retraining
+            if is_ext and cfg.extinction_mode == "encoder_pre":
+                logging.info("Extinction event (pre-encoder)...")
+                if logger is not None:
+                    plots_dir = logger.run_dir / "plots"
+                    plots_dir.mkdir(parents=True, exist_ok=True)
+                    before_path = plots_dir / f"latent_generation_{actual_gen}_before_ext.png"
+                    logging.info(f"Saving snapshot to {before_path}")
+                    save_latent_snapshot(repertoire, cfg, str(before_path), title=f"Latent Space - Gen {actual_gen} (Before Extinction)")
+
+                random_key, subkey = jax.random.split(random_key)
+                # ADDED SAFE KEEP EXTINCTION
+                repertoire, _ = _apply_extinction_by_mode(
+                    repertoire=repertoire,
+                    cfg=cfg,
+                    remaining_prop=_remaining_prop,
+                    random_key=subkey,
+                )
+                # END ADDED SAFE KEEP EXTINCTION
+                _last_extinction_iter = i
+                _actual_extinction_iters.append(i)
+
+                if logger is not None:
+                    after_path = plots_dir / f"latent_generation_{actual_gen}_after_ext.png"
+                    logging.info(f"Saving snapshot to {after_path}")
+                    save_latent_snapshot(repertoire, cfg, str(after_path), title=f"Latent Space - Gen {actual_gen} (After Extinction)")
+
             logging.info("Updating AE...")
             start_time = time.time()
             # cache encoder state for drift computation
@@ -563,27 +673,6 @@ def train(
             )
             ae_timelapse = time.time() - start_time
 
-            # encoder_post: apply extinction after encoder retraining
-            if is_ext and cfg.extinction_mode == "encoder_pre":
-                logging.info("Extinction event (pre-encoder)...")
-                if logger is not None:
-                    plots_dir = logger.run_dir / "plots"
-                    plots_dir.mkdir(parents=True, exist_ok=True)
-                    before_path = plots_dir / f"latent_generation_{actual_gen}_before_ext.png"
-                    logging.info(f"Saving snapshot to {before_path}")
-                    save_latent_snapshot(repertoire, cfg, str(before_path), title=f"Latent Space - Gen {actual_gen} (Before Extinction)")
-
-                random_key, subkey = jax.random.split(random_key)
-                repertoire = repertoire.extinction(
-                    remaining_prop=_remaining_prop, random_key=subkey
-                )
-                _last_extinction_iter = i
-                _actual_extinction_iters.append(i)
-
-                if logger is not None:
-                    after_path = plots_dir / f"latent_generation_{actual_gen}_after_ext.png"
-                    logging.info(f"Saving snapshot to {after_path}")
-                    save_latent_snapshot(repertoire, cfg, str(after_path), title=f"Latent Space - Gen {actual_gen} (After Extinction)")
             metrics_last_iter = jax.tree_util.tree_map(
                 lambda metric: "{0:.4f}".format(float(metric[-1])), model_metrics
             )

@@ -668,3 +668,53 @@ class UnstructuredRepertoirePassiveDesc(UnstructuredRepertoire):
             max_size=self.max_size,
             d_min=self.d_min,
         )
+    # ADDED SAFE KEEP EXTINCTION
+    @jax.jit
+    def extinction_keep_mask(
+        self, keep_mask: jnp.ndarray
+    ) -> "UnstructuredRepertoirePassiveDesc":
+        """Keep exactly entries selected by keep_mask (plus best individual)."""
+
+        valid = self.fitnesses != -jnp.inf
+        best_index = jnp.argmax(self.fitnesses)
+
+        # sanitize mask: only valid entries; always keep best valid entry
+        final_mask = jnp.asarray(keep_mask, dtype=bool) & valid
+        final_mask = jax.lax.cond(
+            jnp.any(valid),
+            lambda m: m.at[best_index].set(True),
+            lambda m: m,
+            final_mask,
+        )
+
+        dummy_fitnesses = jnp.full_like(self.fitnesses, fill_value=-jnp.inf)
+        dummy_descriptors = jnp.full_like(self.descriptors, fill_value=jnp.nan)
+        dummy_passive_descriptors = jnp.full_like(self.passive_descriptors, fill_value=jnp.nan)
+
+        new_fitnesses = jnp.where(final_mask, self.fitnesses, dummy_fitnesses)
+        new_descriptors = jnp.where(final_mask[..., None], self.descriptors, dummy_descriptors)
+        new_passive_descriptors = jnp.where(
+            final_mask[..., None], self.passive_descriptors, dummy_passive_descriptors
+        )
+
+        def mask_tree(x):
+            expanded = final_mask
+            for _ in range(len(x.shape) - 1):
+                expanded = expanded[..., None]
+            return jnp.where(expanded, x, jnp.full_like(x, jnp.nan))
+
+        new_genotypes = jax.tree.map(mask_tree, self.genotypes)
+        new_observations = jax.tree.map(mask_tree, self.observations)
+
+        return UnstructuredRepertoirePassiveDesc(
+            genotypes=new_genotypes,
+            fitnesses=new_fitnesses,
+            descriptors=new_descriptors,
+            passive_descriptors=new_passive_descriptors,
+            observations=new_observations,
+            max_size=self.max_size,
+            d_min=self.d_min,
+        )
+    # END ADDED SAFE KEEP EXTINCTION
+
+
