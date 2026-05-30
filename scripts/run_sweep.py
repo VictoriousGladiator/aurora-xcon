@@ -116,13 +116,15 @@ SNAPSHOT_GENERATIONS = [100, 250, 500, 750, 1000, 1500, 2000]
 
 
 def _with_snapshots(conditions: list[dict], seeds: list[int] = SEEDS, n_snap: int = SNAPSHOT_N_SEEDS) -> list[dict]:
-    """Cross conditions × seeds; first n_snap seeds per condition get snapshot_generations."""
+    """Cross conditions × seeds; first n_snap seeds per condition get snapshots, rest skip them."""
     exps = []
     for c in conditions:
         for i, s in enumerate(seeds):
             exp = dict(seed=s, **c)
             if i < n_snap:
                 exp["snapshot_generations"] = SNAPSHOT_GENERATIONS
+            else:
+                exp["save_extinction_snapshots"] = False
             exps.append(exp)
     return exps
 

@@ -468,6 +468,7 @@ def train(
         _extinction_schedule_window = frozenset()
 
     _snap_gens: set = set(int(g) for g in getattr(cfg, "snapshot_generations", []))
+    _save_ext_snaps: bool = bool(getattr(cfg, "save_extinction_snapshots", True))
 
     _trigger_state = {
         "dmin_stagnant_count": 0,
@@ -649,6 +650,10 @@ def train(
             if _snap_gens and actual_gen in _snap_gens:
                 _Z_ckpt = np.asarray(repertoire.descriptors[valid])
                 logger.save_archive_checkpoint(actual_gen, _Z_ckpt, fits_np)
+                plots_dir = logger.run_dir / "plots"
+                plots_dir.mkdir(parents=True, exist_ok=True)
+                snap_path = plots_dir / f"latent_generation_{actual_gen}_snapshot.png"
+                save_latent_snapshot(repertoire, cfg, str(snap_path), title=f"Latent Space - Gen {actual_gen} (snapshot)")
 
         # Apply extinction before encoder (all modes except encoder_post)
         if is_ext and cfg.extinction_mode not in ("encoder_post", "encoder_pre"):
@@ -656,9 +661,10 @@ def train(
             if logger is not None:
                 plots_dir = logger.run_dir / "plots"
                 plots_dir.mkdir(parents=True, exist_ok=True)
-                before_path = plots_dir / f"latent_generation_{actual_gen}_before_ext.png"
-                logging.info(f"Saving snapshot to {before_path}")
-                save_latent_snapshot(repertoire, cfg, str(before_path), title=f"Latent Space - Gen {actual_gen} (Before Extinction)")
+                if _save_ext_snaps:
+                    before_path = plots_dir / f"latent_generation_{actual_gen}_before_ext.png"
+                    logging.info(f"Saving snapshot to {before_path}")
+                    save_latent_snapshot(repertoire, cfg, str(before_path), title=f"Latent Space - Gen {actual_gen} (Before Extinction)")
 
             random_key, subkey = jax.random.split(random_key)
             # ADDED SAFE KEEP EXTINCTION
@@ -672,7 +678,7 @@ def train(
             _last_extinction_iter = i
             _actual_extinction_iters.append(i)
 
-            if logger is not None:
+            if logger is not None and _save_ext_snaps:
                 after_path = plots_dir / f"latent_generation_{actual_gen}_after_ext.png"
                 logging.info(f"Saving snapshot to {after_path}")
                 save_latent_snapshot(repertoire, cfg, str(after_path), title=f"Latent Space - Gen {actual_gen} (After Extinction)")
@@ -699,9 +705,10 @@ def train(
                 if logger is not None:
                     plots_dir = logger.run_dir / "plots"
                     plots_dir.mkdir(parents=True, exist_ok=True)
-                    before_path = plots_dir / f"latent_generation_{actual_gen}_before_ext.png"
-                    logging.info(f"Saving snapshot to {before_path}")
-                    save_latent_snapshot(repertoire, cfg, str(before_path), title=f"Latent Space - Gen {actual_gen} (Before Extinction)")
+                    if _save_ext_snaps:
+                        before_path = plots_dir / f"latent_generation_{actual_gen}_before_ext.png"
+                        logging.info(f"Saving snapshot to {before_path}")
+                        save_latent_snapshot(repertoire, cfg, str(before_path), title=f"Latent Space - Gen {actual_gen} (Before Extinction)")
 
                 random_key, subkey = jax.random.split(random_key)
                 # ADDED SAFE KEEP EXTINCTION
@@ -715,7 +722,7 @@ def train(
                 _last_extinction_iter = i
                 _actual_extinction_iters.append(i)
 
-                if logger is not None:
+                if logger is not None and _save_ext_snaps:
                     after_path = plots_dir / f"latent_generation_{actual_gen}_after_ext.png"
                     logging.info(f"Saving snapshot to {after_path}")
                     save_latent_snapshot(repertoire, cfg, str(after_path), title=f"Latent Space - Gen {actual_gen} (After Extinction)")
@@ -745,9 +752,10 @@ def train(
                 if logger is not None:
                     plots_dir = logger.run_dir / "plots"
                     plots_dir.mkdir(parents=True, exist_ok=True)
-                    before_path = plots_dir / f"latent_generation_{actual_gen}_before_ext.png"
-                    logging.info(f"Saving snapshot to {before_path}")
-                    save_latent_snapshot(repertoire, cfg, str(before_path), title=f"Latent Space - Gen {actual_gen} (Before Extinction)")
+                    if _save_ext_snaps:
+                        before_path = plots_dir / f"latent_generation_{actual_gen}_before_ext.png"
+                        logging.info(f"Saving snapshot to {before_path}")
+                        save_latent_snapshot(repertoire, cfg, str(before_path), title=f"Latent Space - Gen {actual_gen} (Before Extinction)")
 
                 random_key, subkey = jax.random.split(random_key)
                 # ADDED SAFE KEEP EXTINCTION
@@ -761,7 +769,7 @@ def train(
                 _last_extinction_iter = i
                 _actual_extinction_iters.append(i)
 
-                if logger is not None:
+                if logger is not None and _save_ext_snaps:
                     after_path = plots_dir / f"latent_generation_{actual_gen}_after_ext.png"
                     logging.info(f"Saving snapshot to {after_path}")
                     save_latent_snapshot(repertoire, cfg, str(after_path), title=f"Latent Space - Gen {actual_gen} (After Extinction)")
@@ -854,7 +862,7 @@ def train(
             }
 
         offset = getattr(cfg, "post_extinction_snapshot_offset", 5)
-        if logger is not None and any(i == ext_i + offset for ext_i in _actual_extinction_iters):
+        if _save_ext_snaps and logger is not None and any(i == ext_i + offset for ext_i in _actual_extinction_iters):
             plots_dir = logger.run_dir / "plots"
             plots_dir.mkdir(parents=True, exist_ok=True)
             matching_ext_i = next(ext_i for ext_i in _actual_extinction_iters if i == ext_i + offset)

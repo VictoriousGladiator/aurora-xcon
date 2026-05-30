@@ -82,6 +82,7 @@ extinction_window:
   end_gen: null     # last actual generation eligible (null = no upper limit)
 
 snapshot_generations: []  # exact generation numbers to save archive descriptor checkpoints
+save_extinction_snapshots: true  # save before/after/recovery latent PNGs for each extinction event
 
 # END ADDED SAFE KEEP EXTINCTION
 
