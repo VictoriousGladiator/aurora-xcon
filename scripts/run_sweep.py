@@ -106,8 +106,70 @@ ALL_RELEVANT_CONDITIONS = [
      dict(top_k_percent=20,
          **{"adaptive_extinction.patience": 10, "adaptive_extinction.alpha": 0.2, "adaptive_extinction.cooldown": 10}),
 ]
-SEEDS = [20, 42, 7, 13, 99]
+SEEDS = [20, 42, 7, 13, 99, 0, 100]
+
+# ---------------------------------------------------------------------------
+# Snapshot helpers
+# ---------------------------------------------------------------------------
+SNAPSHOT_N_SEEDS = 2   # first N seeds of each condition get snapshot_generations
+SNAPSHOT_GENERATIONS = [100, 250, 500, 750, 1000, 1500, 2000]
+
+
+def _with_snapshots(conditions: list[dict], seeds: list[int] = SEEDS, n_snap: int = SNAPSHOT_N_SEEDS) -> list[dict]:
+    """Cross conditions × seeds; first n_snap seeds per condition get snapshot_generations."""
+    exps = []
+    for c in conditions:
+        for i, s in enumerate(seeds):
+            exp = dict(seed=s, **c)
+            if i < n_snap:
+                exp["snapshot_generations"] = SNAPSHOT_GENERATIONS
+            exps.append(exp)
+    return exps
+
+
 EXPERIMENTS = [dict(seed=s, **c) for c in COUNT_CONTROL_CONDITIONS for s in SEEDS]
+
+# ---------------------------------------------------------------------------
+# Experiment definitions
+# ---------------------------------------------------------------------------
+
+EXP1_CONDITIONS = [
+    dict(extinction_mode="off",             top_k_percent=20, **{"safe_keep.enabled": False}),
+    dict(extinction_mode="static",          top_k_percent=20, extinction_freq=10, remaining_prop=0.05, **{"safe_keep.enabled": False}),
+    dict(extinction_mode="fitness_trigger", top_k_percent=20, **{"safe_keep.enabled": False, "adaptive_extinction.patience": 10, "adaptive_extinction.alpha": 0.2, "adaptive_extinction.cooldown": 10}),
+    dict(extinction_mode="qd_trigger",      top_k_percent=20, **{"safe_keep.enabled": False, "adaptive_extinction.patience": 10, "adaptive_extinction.alpha": 0.2, "adaptive_extinction.cooldown": 10}),
+    dict(extinction_mode="encoder_post",    top_k_percent=20, **{"safe_keep.enabled": False}),
+    dict(extinction_mode="encoder_pre",     top_k_percent=20, **{"safe_keep.enabled": False}),
+]
+EXP1_EXPERIMENTS = _with_snapshots(EXP1_CONDITIONS)
+
+EXP2_CONDITIONS = [
+    dict(extinction_mode="off",                       top_k_percent=20, **{"safe_keep.enabled": False}),
+    dict(extinction_mode="static",                    top_k_percent=20, extinction_freq=10, remaining_prop=0.05, **{"safe_keep.enabled": False}),
+    dict(extinction_mode="random_fixed_count_window", top_k_percent=20, target_extinction_count=12, **{"safe_keep.enabled": False, "extinction_window.start_gen": 0,    "extinction_window.end_gen": 750}),
+    dict(extinction_mode="random_fixed_count",        top_k_percent=20, target_extinction_count=12, **{"safe_keep.enabled": False}),
+    dict(extinction_mode="random_fixed_count_window", top_k_percent=20, target_extinction_count=12, **{"safe_keep.enabled": False, "extinction_window.start_gen": 1000, "extinction_window.end_gen": 2000}),
+]
+EXP2_EXPERIMENTS = _with_snapshots(EXP2_CONDITIONS)
+
+EXP3_CONDITIONS = [
+    dict(extinction_mode="off",    top_k_percent=20, **{"safe_keep.enabled": False}),
+    dict(extinction_mode="static", top_k_percent=20, extinction_freq=10, remaining_prop=0.05, **{"safe_keep.enabled": False}),
+    dict(extinction_mode="static", top_k_percent=20, extinction_freq=33, remaining_prop=0.05, **{"safe_keep.enabled": False}),  # ~12 per run
+    dict(extinction_mode="static", top_k_percent=20, extinction_freq=22, remaining_prop=0.05, **{"safe_keep.enabled": False}),  # ~18 per run
+]
+EXP3_EXPERIMENTS = _with_snapshots(EXP3_CONDITIONS)
+
+EXP4_CONDITIONS = [
+    dict(extinction_mode="off",             top_k_percent=20),
+    dict(extinction_mode="static",          top_k_percent=20, extinction_freq=10, remaining_prop=0.05),
+    dict(extinction_mode="fitness_trigger", top_k_percent=20, **{"adaptive_extinction.patience": 10, "adaptive_extinction.alpha": 0.2, "adaptive_extinction.cooldown": 10}),
+    dict(extinction_mode="qd_trigger",      top_k_percent=20, **{"adaptive_extinction.patience": 10, "adaptive_extinction.alpha": 0.2, "adaptive_extinction.cooldown": 10}),
+    dict(extinction_mode="encoder_post",    top_k_percent=20),
+    dict(extinction_mode="encoder_pre",     top_k_percent=20),
+    dict(extinction_mode="fixed_generations", top_k_percent=20, **{"fixed_generations.generations": [20, 100, 250]}),
+]
+EXP4_EXPERIMENTS = _with_snapshots(EXP4_CONDITIONS)
 
 # ---------------------------------------------------------------------------
 # Defaults matching aurora.yaml
@@ -120,6 +182,7 @@ _DEFAULTS: dict = {
     "adaptive_extinction.cooldown": 10,
     "extinction_freq": 10,
     "remaining_prop": 0.05,
+    "safe_keep.enabled": True,
 }
 
 _PERF_ENV: dict[str, str] = {
@@ -147,14 +210,20 @@ def _log(msg: str) -> None:
 #   - modes not listed here fall back to mode name only (or fitness_trigger logic)
 # To add a new mode: just add an entry here — no if/elif needed.
 _MODE_VARIANT_PARAMS: dict[str, list[tuple[str, str]]] = {
-    "off":                       [],
-    "static":                    [("extinction_freq",              "freq")],
-    "static_ramped_proportion":  [("extinction_freq",              "freq")],
-    "random_fixed_count":        [("target_extinction_count",      "")],
-    "encoder_post":              [],
-    "encoder_pre":               [],
-    "random_encoder_rate":       [],
-    "d_min_trigger":             [
+    "off":                        [],
+    "static":                     [("extinction_freq",              "freq")],
+    "static_ramped_proportion":   [("extinction_freq",              "freq")],
+    "random_fixed_count":         [("target_extinction_count",      "")],
+    "random_fixed_count_window":  [
+        ("target_extinction_count",     "n"),
+        ("extinction_window.start_gen", "s"),
+        ("extinction_window.end_gen",   "e"),
+    ],
+    "fixed_generations":          [],
+    "encoder_post":               [],
+    "encoder_pre":                [],
+    "random_encoder_rate":        [],
+    "d_min_trigger":              [
         ("adaptive_extinction.d_min_patience", "dp"),
         ("adaptive_extinction.d_min_alpha",    "da"),
     ],
@@ -189,18 +258,19 @@ def _experiment_key(exp: dict, reward_type: str) -> str:
             parts.append(f"{label}{val}")
         cond = "_".join(parts)
 
-    elif mode == "fitness_trigger":
+    elif mode in ("fitness_trigger", "qd_trigger"):
         topk      = int(exp.get("top_k_percent", 20))
         pat       = int(exp.get("adaptive_extinction.patience", 10))
         alpha_str = f"{float(exp.get('adaptive_extinction.alpha', 0.2)):.1f}".replace(".", "")
+        prefix    = "fitness_trigger" if mode == "fitness_trigger" else "qd_trigger"
         if topk != 20:
-            cond = f"fitness_trigger_topk{topk}"
+            cond = f"{prefix}_topk{topk}"
         elif pat != 10:
-            cond = f"fitness_trigger_patience{pat}"
+            cond = f"{prefix}_patience{pat}"
         elif alpha_str != "02":
-            cond = f"fitness_trigger_alpha{alpha_str}"
+            cond = f"{prefix}_alpha{alpha_str}"
         else:
-            cond = "fitness_trigger_default"
+            cond = f"{prefix}_default"
 
     else:
         # Unknown / future mode — use mode name verbatim so it still gets a sane dir
@@ -232,6 +302,10 @@ _SUBSETS: dict[str, list[dict]] = {
     "new_triggers":  NEW_TRIGGER_CONDITIONS,
     "count_control": COUNT_CONTROL_CONDITIONS,
     "all_relevant":  ALL_RELEVANT_CONDITIONS,
+    "exp1":          EXP1_CONDITIONS,
+    "exp2":          EXP2_CONDITIONS,
+    "exp3":          EXP3_CONDITIONS,
+    "exp4":          EXP4_CONDITIONS,
 }
 
 # Labels derived directly from condition dicts — no manual sync needed.
@@ -339,6 +413,9 @@ def _build_cmd(overrides: dict, extra: list[str] | None = None) -> list[str]:
                 cmd[idx] = f"extinction_mode={v}"
             except StopIteration:
                 cmd.append(f"extinction_mode={v}")
+        elif isinstance(v, list):
+            val_str = "[" + ",".join(str(x) for x in v) + "]"
+            cmd.append(f"{k}={val_str}")
         else:
             cmd.append(f"{k}={v}")
     if extra:
@@ -430,6 +507,13 @@ def _short_label(exp: dict) -> str:
     if mode == "static_ramped_proportion":
         freq = exp.get("extinction_freq", 10)
         return f"seed={seed} mode=ramped_prop freq={freq}"
+    if mode == "qd_trigger":
+        return f"seed={seed} mode=qd_trigger topk={topk} p={pat} α={alpha}"
+    if mode == "random_fixed_count_window":
+        n = exp.get("target_extinction_count", "?")
+        s = exp.get("extinction_window.start_gen", 0)
+        e = exp.get("extinction_window.end_gen", "end")
+        return f"seed={seed} mode=rfc_window n={n} [{s},{e}]"
     return f"seed={seed} mode={mode} topk={topk} p={pat} α={alpha}"
 
 # ---------------------------------------------------------------------------
@@ -491,7 +575,10 @@ def main() -> None:
     project_root = Path(__file__).parent.parent
 
     conditions = _SUBSETS[subset]
-    experiments = [dict(seed=s, **c) for c in conditions for s in SEEDS]
+    if subset in ("exp1", "exp2", "exp3", "exp4"):
+        experiments = _with_snapshots(conditions)
+    else:
+        experiments = [dict(seed=s, **c) for c in conditions for s in SEEDS]
     n = len(experiments)
 
     reward_overrides = [f"env.reward_type={reward_type}"]

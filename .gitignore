@@ -12,3 +12,4 @@ docker-compose.cpu.yml
 docker-compose.yml
 Dockerfile
 .claude/
+output_plots_latest/

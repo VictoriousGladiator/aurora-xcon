@@ -433,6 +433,9 @@ def train(
     _top_k_history: collections.deque = collections.deque(
         maxlen=5 * cfg.adaptive_extinction.patience + 1
     )
+    _qd_score_history: collections.deque = collections.deque(
+        maxlen=5 * cfg.adaptive_extinction.patience + 1
+    )
     _last_extinction_iter: int = 0
     _actual_extinction_iters: list = []
 
@@ -446,10 +449,25 @@ def train(
 
     rng = np.random.default_rng(cfg.seed + 99991)
     eligible = np.arange(0, num_generations - 1)
-    
+
     _extinction_schedule = sample_fixed_count(
         eligible, n=cfg.target_extinction_count, rng=rng, ae_cfg=cfg, num_generations=num_generations
     )
+
+    if cfg.extinction_mode == "random_fixed_count_window":
+        _ew = cfg.extinction_window
+        _start_iter = max(0, int(_ew.start_gen) // cfg.metrics_log_period)
+        _end_gen_val = _ew.end_gen
+        _end_iter = (int(_end_gen_val) // cfg.metrics_log_period) if _end_gen_val is not None else num_generations - 1
+        _end_iter = min(_end_iter, num_generations - 1)
+        _eligible_w = np.arange(_start_iter, _end_iter)
+        _extinction_schedule_window = sample_fixed_count(
+            _eligible_w, n=cfg.target_extinction_count, rng=rng, ae_cfg=cfg, num_generations=num_generations
+        )
+    else:
+        _extinction_schedule_window = frozenset()
+
+    _snap_gens: set = set(int(g) for g in getattr(cfg, "snapshot_generations", []))
 
     _trigger_state = {
         "dmin_stagnant_count": 0,
@@ -500,6 +518,7 @@ def train(
             mean_topk = float("nan")
         _top_k_history.append(mean_topk)
         _fitness_history.append(mean_topk)
+        _qd_score_history.append(float(np.float32(fits_np.sum())) if fits_np.size else float("nan"))
 
         # d_min signal (only meaningful for adaptive repertoire)
         if cfg.repertoire == "adaptive":
@@ -526,6 +545,17 @@ def train(
             elif cfg.extinction_mode == "fitness_trigger":
                 fired, rr, hr, ratio = _check_fitness_trigger(
                     _top_k_history, _last_extinction_iter, i, cfg.adaptive_extinction
+                )
+                trigger_info = {
+                    "recent_rate": rr,
+                    "historical_rate": hr,
+                    "ratio": ratio,
+                    "triggered": fired,
+                }
+                is_ext = fired
+            elif cfg.extinction_mode == "qd_trigger":
+                fired, rr, hr, ratio = _check_fitness_trigger(
+                    _qd_score_history, _last_extinction_iter, i, cfg.adaptive_extinction
                 )
                 trigger_info = {
                     "recent_rate": rr,
@@ -572,6 +602,8 @@ def train(
             
             elif cfg.extinction_mode == "random_fixed_count":
                 is_ext = i in _extinction_schedule
+            elif cfg.extinction_mode == "random_fixed_count_window":
+                is_ext = i in _extinction_schedule_window
             
             elif cfg.extinction_mode == "fixed_generations":
                 # Trigger at specific generation numbers
@@ -612,6 +644,9 @@ def train(
             )
             if (bool(getattr(cfg, "save_archive_checkpoints", False))
                     and actual_gen % int(getattr(cfg, "archive_checkpoint_interval", 100)) == 0):
+                _Z_ckpt = np.asarray(repertoire.descriptors[valid])
+                logger.save_archive_checkpoint(actual_gen, _Z_ckpt, fits_np)
+            if _snap_gens and actual_gen in _snap_gens:
                 _Z_ckpt = np.asarray(repertoire.descriptors[valid])
                 logger.save_archive_checkpoint(actual_gen, _Z_ckpt, fits_np)
 

@@ -6,9 +6,14 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from omegaconf import OmegaConf
+
+# Same offset used by evaluation/compute_metrics.py so per-run plots and
+# summary metrics report QD score on the same scale.
+_KHEPERAX_QD_OFFSET = float(np.sqrt(2) * 100)
 
 
 def _mark_extinctions(ax, gens_extinct):
@@ -43,16 +48,20 @@ def plot_run(run_dir: Path):
     gens_extinct = m.loc[m["extinction_event"], "generation"].tolist()
     title = _make_title(run_dir)
 
-    # --- fitness panels ---
+    # Apply kheperax offset so qd_score here matches evaluation/compute_metrics.py.
+    if "archive_size" in m.columns:
+        m = m.copy()
+        m["qd_score"] = m["qd_score"] + _KHEPERAX_QD_OFFSET * m["archive_size"]
+
+    # --- fitness panels (archive_size omitted — always constant) ---
     cols = [
-        ("archive_size", "Archive Size (# occupied cells)"),
-        ("qd_score", "QD Score (active)"),
+        ("qd_score", "QD Score (offset, active)"),
         ("max_fitness", "Max Fitness (active)"),
         ("mean_fitness", "Mean Fitness (active)"),
         ("mean_fitness_top_k", "Mean Fitness top-k% (active)"),
     ]
 
-    fig, axes = plt.subplots(len(cols), 1, figsize=(10, 10), sharex=True)
+    fig, axes = plt.subplots(len(cols), 1, figsize=(10, 9), sharex=True)
     fig.suptitle(title, fontsize=9, y=1.01)
 
     for ax, (col, label) in zip(axes, cols):

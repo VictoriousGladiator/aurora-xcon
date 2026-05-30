@@ -59,7 +59,7 @@ remaining_prop: 0.05
 post_extinction_snapshot_offset: 5
 
 top_k_percent: 20
-extinction_mode: "off"   # "off" | "static" | "fitness_trigger" | "d_min_trigger" | "static_ramped_proportion"
+extinction_mode: "off"   # "off" | "static" | "fitness_trigger" | "qd_trigger" | "d_min_trigger" | "static_ramped_proportion" | "random_fixed_count_window"
 
 target_extinction_count: 13
 
@@ -77,11 +77,17 @@ safe_keep:
 fixed_generations:
   generations: [250, 750]  # List of exact generation numbers to trigger extinction
 
+extinction_window:
+  start_gen: 0      # first actual generation eligible for random_fixed_count_window (inclusive)
+  end_gen: null     # last actual generation eligible (null = no upper limit)
+
+snapshot_generations: []  # exact generation numbers to save archive descriptor checkpoints
+
 # END ADDED SAFE KEEP EXTINCTION
 
 
 adaptive_extinction:
-  warmup: 50    # outer iterations before trigger is eligible
+  warmup: 0     # outer iterations before trigger is eligible
   patience: 10  # recent window size (outer iterations)
   alpha: 0.2    # recent_rate / historical_rate threshold
   cooldown: 10  # outer iterations after an extinction before re-trigger
