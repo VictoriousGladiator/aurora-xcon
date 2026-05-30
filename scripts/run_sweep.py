@@ -88,7 +88,7 @@ NEW_TRIGGER_CONDITIONS = [
 COUNT_CONTROL_CONDITIONS = [
     #dict(extinction_mode="random_fixed_count", target_extinction_count=12, top_k_percent=20),
     #dict(extinction_mode="random_fixed_count", target_extinction_count=15, top_k_percent=20),
-    dict(top_k_percent=20, extinction_mode="encoder_pre"),
+    dict(top_k_percent=20, extinction_mode="encoder_post"),
     #dict(top_k_percent=20, extinction_mode="static", extinction_freq=33, remaining_prop=0.05),# 400/12
     #dict(top_k_percent=20, extinction_mode="static", extinction_freq=27, remaining_prop=0.05),# 400/15
 ]

@@ -66,13 +66,14 @@ target_extinction_count: 13
 # ADDED SAFE KEEP EXTINCTION
 safe_keep:
   enabled: true
+  mode: "fitness_coverage"  # NEW option
   remaining_prop: 0.05
-  x_min: 0.0
-  x_max: 0.3
-  y_min_soft: 0.6
-  w_x_range: 1.5
-  w_y_high: 3.0
-  jitter_eps: 1e-6
+  
+  fitness_coverage:
+    n_bins: 5                    # Number of fitness levels to cover
+    min_per_bin: "auto"          # "auto" = (remaining_prop * total) / (n_bins * 2)
+    neighbor_dist: 0.15          # Spatial distance for "cluster" detection
+
 # END ADDED SAFE KEEP EXTINCTION
 
 

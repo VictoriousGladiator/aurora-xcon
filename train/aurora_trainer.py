@@ -273,37 +273,103 @@ def _safe_keep_prop(cfg) -> float:
     return float(cfg.remaining_prop)
 
 
-def _descriptor_safe_keep_mask(repertoire, cfg, random_key):
+def _fitness_coverage_mask(repertoire, cfg, random_key):
+    """
+    Ensure coverage across fitness levels while favoring spatial coherence.
+    """
     valid = repertoire.fitnesses != -jnp.inf
     n_valid = int(jnp.sum(valid))
-
-    keep_mask = jnp.zeros_like(valid, dtype=bool)
     if n_valid == 0:
-        return keep_mask
-
-    sk = cfg.safe_keep
+        return jnp.zeros_like(valid, dtype=bool)
+    
     keep_prop = _safe_keep_prop(cfg)
     k = max(1, int(np.floor(keep_prop * n_valid)))
-
-    P = repertoire.passive_descriptors
-    x = P[:, 0]
-    y = P[:, 1]
-
-    x_ok = ((x >= float(sk.x_min)) & (x <= float(sk.x_max))).astype(jnp.float32)
-    y_ok = (y >= float(sk.y_min_soft)).astype(jnp.float32)
-
-    score = float(sk.w_x_range) * x_ok + float(sk.w_y_high) * y_ok
-
-    eps = float(sk.jitter_eps)
-    if eps > 0.0:
-        noise = jax.random.uniform(random_key, shape=score.shape)
-        score = score + eps * noise
-
-    # never select invalid cells
-    score = jnp.where(valid, score, -jnp.inf)
-
-    top_idx = jnp.argsort(score)[-k:]
-    keep_mask = keep_mask.at[top_idx].set(True)
+    
+    Z = repertoire.descriptors[valid]      # (N, 2) latent positions
+    fits = repertoire.fitnesses[valid]      # (N,) fitness values
+    
+    # === STEP 1: Ensure minimum coverage per fitness bin ===
+    n_bins = cfg.safe_keep.fitness_coverage.n_bins  # e.g., 5
+    fit_min, fit_max = float(jnp.min(fits)), float(jnp.max(fits))
+    
+    # Assign each point to a fitness bin
+    bin_edges = jnp.linspace(fit_min, fit_max, n_bins + 1)
+    bin_ids = jnp.digitize(fits, bin_edges) - 1
+    bin_ids = jnp.clip(bin_ids, 0, n_bins - 1)
+    
+    # Minimum per bin (ensure at least 1 from each non-empty bin)
+    min_per_bin = max(1, k // (n_bins * 2))  # Reserve half for coverage
+    
+    keep_mask_valid = jnp.zeros(n_valid, dtype=bool)
+    
+    # === STEP 2: Per-bin selection by spatial coherence ===
+    for bin_id in range(n_bins):
+        bin_mask = bin_ids == bin_id
+        bin_indices = jnp.where(bin_mask)[0]
+        n_in_bin = len(bin_indices)
+        
+        if n_in_bin == 0:
+            continue
+        
+        # How many to keep from this bin
+        n_keep_bin = min(min_per_bin, n_in_bin)
+        
+        if n_in_bin <= n_keep_bin:
+            # Keep all if bin is small
+            keep_mask_valid = keep_mask_valid.at[bin_indices].set(True)
+        else:
+            # Select by spatial density (clustering)
+            bin_Z = Z[bin_indices]
+            
+            # Compute local density for each point in this bin
+            # Points with more neighbors = part of denser clusters
+            dists = jnp.sqrt(jnp.sum((bin_Z[:, None, :] - bin_Z[None, :, :]) ** 2, axis=-1))
+            neighbor_thresh = cfg.safe_keep.fitness_coverage.neighbor_dist  # e.g., 0.1
+            
+            # Count neighbors within threshold
+            n_neighbors = jnp.sum(dists < neighbor_thresh, axis=1) - 1  # exclude self
+            
+            # Keep points with highest local density (most "representative" of clusters)
+            top_indices_in_bin = jnp.argsort(n_neighbors)[-n_keep_bin:]
+            actual_indices = bin_indices[top_indices_in_bin]
+            keep_mask_valid = keep_mask_valid.at[actual_indices].set(True)
+    
+    # === STEP 3: Fill remaining slots with globally coherent points ===
+    n_already_kept = int(jnp.sum(keep_mask_valid))
+    n_remaining = k - n_already_kept
+    
+    if n_remaining > 0:
+        # Among unselected points, pick those that minimize fitness distance 
+        # to already-selected points (reinforce the clustering signal)
+        unselected = ~keep_mask_valid
+        unselected_indices = jnp.where(unselected)[0]
+        
+        if len(unselected_indices) > 0:
+            selected_Z = Z[keep_mask_valid]
+            selected_fits = fits[keep_mask_valid]
+            unselected_Z = Z[unselected_indices]
+            unselected_fits = fits[unselected_indices]
+            
+            # Score unselected points by average fitness similarity to selected
+            fit_diffs = jnp.abs(
+                unselected_fits[:, None] - selected_fits[None, :]
+            )
+            spatial_dists = jnp.sqrt(
+                jnp.sum((unselected_Z[:, None, :] - selected_Z[None, :, :]) ** 2, axis=-1)
+            )
+            
+            # Prefer points that are close in fitness AND space to existing selections
+            combined_score = -fit_diffs - 0.1 * spatial_dists
+            max_score = jnp.max(combined_score, axis=1)  # best match to any selected
+            
+            # Pick highest scoring
+            extra_indices = unselected_indices[jnp.argsort(max_score)[-n_remaining:]]
+            keep_mask_valid = keep_mask_valid.at[extra_indices].set(True)
+    
+    # Convert back to full mask
+    keep_mask = jnp.zeros_like(valid, dtype=bool)
+    valid_indices = jnp.where(valid)[0]
+    keep_mask = keep_mask.at[valid_indices].set(keep_mask_valid)
     return keep_mask
 
 
@@ -313,7 +379,7 @@ def _apply_extinction_by_mode(repertoire, cfg, remaining_prop: float, random_key
     if bool(cfg.safe_keep.enabled):
         # split key for deterministic tie-break jitter
         random_key, score_key = jax.random.split(random_key)
-        keep_mask = _descriptor_safe_keep_mask(repertoire, cfg, score_key)
+        keep_mask = _fitness_coverage_mask(repertoire, cfg, score_key)
 
         if not hasattr(repertoire, "extinction_keep_mask"):
             raise ValueError(
