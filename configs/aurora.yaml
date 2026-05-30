@@ -74,6 +74,9 @@ safe_keep:
     min_per_bin: "auto"          # "auto" = (remaining_prop * total) / (n_bins * 2)
     neighbor_dist: 0.15          # Spatial distance for "cluster" detection
 
+fixed_generations:
+  generations: [250, 750]  # List of exact generation numbers to trigger extinction
+
 # END ADDED SAFE KEEP EXTINCTION
 
 

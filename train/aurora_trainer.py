@@ -572,6 +572,12 @@ def train(
             
             elif cfg.extinction_mode == "random_fixed_count":
                 is_ext = i in _extinction_schedule
+            
+            elif cfg.extinction_mode == "fixed_generations":
+                # Trigger at specific generation numbers
+                target_gens = cfg.fixed_generations.generations
+                is_ext = actual_gen in target_gens
+
 
 
         # Compute remaining_prop for this potential extinction event.
