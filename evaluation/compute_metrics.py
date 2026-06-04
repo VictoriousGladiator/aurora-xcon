@@ -1,10 +1,16 @@
 """Compute per-run scalar summary metrics from completed aurora-xcon runs.
 
 Usage (from project root):
-    python evaluation/compute_metrics.py                       # reward_type=final (default)
-    python evaluation/compute_metrics.py --reward final_speed  # final_speed runs
+    python evaluation/compute_metrics.py --exp 1     # scan evaluation/experiments/exp1/
+    python evaluation/compute_metrics.py --exp 2
+    python evaluation/compute_metrics.py --exp 3
+    python evaluation/compute_metrics.py --exp 4
+    python evaluation/compute_metrics.py             # legacy: scans output/
+    python evaluation/compute_metrics.py --reward final_speed --exp 1
 
-Output: evaluation/metrics_summary_{reward_type}.csv
+Output:
+    --exp N  ->  evaluation/experiments/expN.csv
+    legacy   ->  evaluation/metrics_summary_{reward_type}[_{subset}].csv
 """
 from __future__ import annotations
 import sys
@@ -80,9 +86,29 @@ def compute_run_metrics(run_dir: Path, reward_type: str = "final") -> dict:
     }
 
 
+def _deduplicate(runs: list[dict]) -> list[dict]:
+    """Keep only the most recently modified run per (condition_label, seed)."""
+    seen: dict[tuple, dict] = {}
+    for run_info in runs:
+        label = condition_label(run_info)
+        key = (label, run_info["seed"])
+        if key not in seen:
+            seen[key] = run_info
+        else:
+            try:
+                existing_mtime = seen[key]["run_dir"].stat().st_mtime
+                this_mtime = run_info["run_dir"].stat().st_mtime
+                if this_mtime > existing_mtime:
+                    seen[key] = run_info
+            except OSError:
+                pass
+    return list(seen.values())
+
+
 def main() -> None:
     reward_type = "final"
     subset: str | None = None
+    exp_id: str | None = None
     args = sys.argv[1:]
     i = 0
     while i < len(args):
@@ -95,25 +121,44 @@ def main() -> None:
             subset = args[i + 1]; i += 2
         elif a.startswith("--subset="):
             subset = a.split("=", 1)[1]; i += 1
+        elif a == "--exp" and i + 1 < len(args):
+            exp_id = args[i + 1]; i += 2
+        elif a.startswith("--exp="):
+            exp_id = a.split("=", 1)[1]; i += 1
         else:
             i += 1
 
-    if subset is not None and subset not in SUBSET_LABELS:
-        print(f"ERROR: unknown --subset '{subset}'. Choose from: {sorted(SUBSET_LABELS)}")
-        sys.exit(1)
+    # --exp mode: scan a specific evaluation/experiments/expN/ directory
+    if exp_id is not None:
+        exp_dir = _PROJECT_ROOT / "experiments" / f"exp{exp_id}"
+        if not exp_dir.exists():
+            print(f"ERROR: experiment directory not found: {exp_dir}")
+            sys.exit(1)
+        output_csv = _EVAL_DIR / "experiments" / f"exp{exp_id}.csv"
+        runs = scan_runs(_PROJECT_ROOT, search_root=exp_dir)
+        print(f"Scanning {exp_dir} ...")
+    else:
+        # Legacy mode: scan output/ (old behaviour)
+        if subset is not None and subset not in SUBSET_LABELS:
+            print(f"ERROR: unknown --subset '{subset}'. Choose from: {sorted(SUBSET_LABELS)}")
+            sys.exit(1)
+        csv_tag = f"_{subset}" if subset else ""
+        output_csv = _EVAL_DIR / f"metrics_summary_{reward_type}{csv_tag}.csv"
+        runs = scan_runs(_PROJECT_ROOT)
+        print("Scanning output/ ...")
 
-    allowed_labels: set[str] | None = set(SUBSET_LABELS[subset]) if subset else None
-
-    # Include subset in output filename so different experiment CSVs don't overwrite each other.
-    csv_tag = f"_{subset}" if subset else ""
-    output_csv = _EVAL_DIR / f"metrics_summary_{reward_type}{csv_tag}.csv"
-
-    runs = scan_runs(_PROJECT_ROOT)
     complete = [r for r in runs if r["is_complete"] and r.get("reward_type", "final") == reward_type]
-    total_complete = sum(1 for r in runs if r["is_complete"])
-    print(f"Found {len(complete)} complete {reward_type} run(s) (out of {total_complete} total complete).")
-    if subset:
+    total_found = sum(1 for r in runs if r["is_complete"])
+    print(f"Found {len(complete)} complete {reward_type} run(s) (out of {total_found} total complete).")
+
+    # Apply --subset allowlist (legacy mode only)
+    allowed_labels: set[str] | None = None
+    if exp_id is None and subset is not None:
+        allowed_labels = set(SUBSET_LABELS[subset])
         print(f"Filtering to subset '{subset}': {SUBSET_LABELS[subset]}")
+
+    # Deduplicate: one row per (label, seed)
+    complete = _deduplicate(complete)
     print()
 
     if not complete:
@@ -134,7 +179,7 @@ def main() -> None:
             **metrics,
         })
         print(
-            f"  [{label:25s}] seed={run_info['seed']:3d}  "
+            f"  [{label:35s}] seed={run_info['seed']:3d}  "
             f"qd={metrics['final_qd_score']:10.1f}  "
             f"best_fit={metrics['best_fitness_reached']:7.3f}  "
             f"ext={metrics['extinction_count']:3d}"
@@ -147,7 +192,7 @@ def main() -> None:
     ])
     if skipped:
         print(f"  (skipped {skipped} run(s) outside subset '{subset}')")
-    _EVAL_DIR.mkdir(parents=True, exist_ok=True)
+    output_csv.parent.mkdir(parents=True, exist_ok=True)
     summary.to_csv(output_csv, index=False)
     print(f"\nSaved {len(summary)} rows to {output_csv}")
 

@@ -56,17 +56,23 @@ def _infer_reward_type(cfg_path: Path) -> str:
     return "final"
 
 
-def scan_runs(project_root: Path) -> list[dict]:
-    """Scan output/ for run directories and return a list of metadata dicts.
+def scan_runs(project_root: Path, search_root: Path | None = None) -> list[dict]:
+    """Scan a run directory tree and return a list of metadata dicts.
+
+    By default scans output/ under project_root. Pass search_root to target a
+    specific directory (e.g. evaluation/experiments/exp1/).
 
     Each dict has keys:
         run_dir, seed, extinction_mode, top_k_percent,
         patience, alpha, cooldown,
         extinction_freq, remaining_prop,
+        extinction_window_start_gen, extinction_window_end_gen,
+        fixed_generations_list,
         is_complete, max_generation
     """
+    root = search_root if search_root is not None else (project_root / "output")
     results = []
-    for cfg_path in sorted((project_root / "output").rglob("runs/*/config.yaml")):
+    for cfg_path in sorted(root.rglob("runs/*/config.yaml")):
         run_dir = cfg_path.parent
         try:
             cfg = OmegaConf.load(str(cfg_path))
@@ -86,6 +92,9 @@ def scan_runs(project_root: Path) -> list[dict]:
             "extinction_freq": int(cfg.get("extinction_freq", _DEFAULTS["extinction_freq"])),
             "remaining_prop": float(cfg.get("remaining_prop", _DEFAULTS["remaining_prop"])),
             "target_extinction_count": cfg.get("target_extinction_count", None),
+            "extinction_window_start_gen": int((cfg.get("extinction_window", {}) or {}).get("start_gen", 0)),
+            "extinction_window_end_gen":   (cfg.get("extinction_window", {}) or {}).get("end_gen", None),
+            "fixed_generations_list":      list((cfg.get("fixed_generations", {}) or {}).get("generations", [])),
             # reward_type absent in old configs → infer from deterministic dir name if possible,
             # otherwise default to "final".
             # New-style paths: output/{reward_type}_{condition}_seed{N}/runs/...
@@ -143,8 +152,26 @@ def condition_label(cfg: dict) -> str:
     if mode == "random_fixed_count":
         count = cfg.get("target_extinction_count", "?")
         return f"random_fixed_count_{count}"
+    if mode == "random_fixed_count_window":
+        count = cfg.get("target_extinction_count", "?")
+        s = cfg.get("extinction_window_start_gen", 0)
+        e = cfg.get("extinction_window_end_gen", "end")
+        return f"random_fixed_count_window_n{count}_s{s}_e{e}"
+    if mode == "fixed_generations":
+        return "fixed_generations"
+    if mode == "qd_trigger":
+        topk = int(cfg["top_k_percent"])
+        patience = int(cfg["patience"])
+        alpha = float(cfg["alpha"])
+        if topk == _DEFAULT_TOPK and patience == _DEFAULT_PATIENCE and abs(alpha - _DEFAULT_ALPHA) < 1e-5:
+            return "qd_trigger_default"
+        if topk != _DEFAULT_TOPK:
+            return f"qd_trigger_topk{topk}"
+        if patience != _DEFAULT_PATIENCE:
+            return f"qd_trigger_patience{patience}"
+        return f"qd_trigger_alpha{f'{alpha:.1f}'.replace('.', '')}"
 
-    # fitness_trigger — distinguish by topk/patience/alpha
+    # fitness_trigger (and unrecognised modes) — distinguish by topk/patience/alpha
     topk = int(cfg["top_k_percent"])
     patience = int(cfg["patience"])
     alpha = float(cfg["alpha"])
